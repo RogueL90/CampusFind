@@ -1,0 +1,34 @@
+export type UserRole = "student" | "office" | "moderator";
+export type ReportStatus = "open" | "claimed" | "proof_pending" | "resolved" | "at_office" | "picked_up";
+export type Report = {
+  id: string;
+  title: string;
+  category: string;
+  type: "issue" | "lost" | "found";
+  status: ReportStatus;
+  routed_to: string;
+  photo_url?: string;
+  lat: number;
+  lng: number;
+  created_at: string;
+  status_events: { label: string; at: string; complete: boolean }[];
+  votes: number;
+  finder_code?: string;
+  reporter_name?: string;
+  finder_name?: string;
+};
+export type Mission = {
+  id: string;
+  report_id: string;
+  report_title: string;
+  points: number;
+  proof_needed: string;
+  status: "available" | "active" | "proof_pending" | "completed";
+  claimed_at?: string;
+  claim_expires_at?: string;
+  user_id?: string;
+  proof?: NewProof;
+};
+export type NewProof = { photo_url: string; lat: number; lng: number; note?: string };
+export type Notification = { id: string; text: string; link?: string; read: boolean; created_at: string };
+export type Reward = { id: string; title: string; points_cost: number; description: string };
