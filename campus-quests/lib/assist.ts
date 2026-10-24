@@ -78,12 +78,21 @@ const RESET_NEEDS = /\b(reset|clear|remove) (all |my )?(needs|settings)\b|\bno (
 /** "No stairs" and "without steps" ask for step-free routes; they aren't negations. */
 const stripStepPhrases = (clause: string) => clause.replace(/\b(no|without|avoid(ing)?|can'?t (do|use|climb)) (stairs?|steps?)\b/g, " step-free ");
 
+/** True when the sentence talks about an access need, including "I am not in a wheelchair". */
+export function mentionsAccessNeed(text: string): boolean {
+  return text
+    .toLowerCase()
+    .split(/[,.;!?]|\bbut\b|\band\b|\balso\b|\bplus\b/)
+    .some((raw) => NEED_RULES.some(([, rule]) => rule.test(stripStepPhrases(raw))));
+}
+
 export function keywordNeeds(text: string, current: AssistState): NeedsResult {
   const lower = text.toLowerCase();
   const needs = new Set<AccessNeed>(RESET_NEEDS.test(lower) ? [] : current.needs);
   const shown = new Set<Category>();
   const hidden = new Set<Category>();
   const alerts: AlertSettings = {};
+  const talkedAboutNeeds = mentionsAccessNeed(lower);
 
   for (const raw of lower.split(/[,.;!?]|\bbut\b|\band\b|\balso\b|\bplus\b/)) {
     const clause = stripStepPhrases(raw);
@@ -110,7 +119,11 @@ export function keywordNeeds(text: string, current: AssistState): NeedsResult {
 
   let focus: Category[] | null = null;
   if (SHOW_ALL.test(lower)) focus = [...CATEGORY_IDS];
-  else if (shown.size) {
+  else if (talkedAboutNeeds) {
+    // A need, or "I am not in a wheelchair", keeps paths and access and drops water, waste and the rest.
+    shown.add("paths").add("accessibility");
+    focus = CATEGORY_IDS.filter((c) => shown.has(c) && !hidden.has(c));
+  } else if (shown.size) {
     if (needs.size) shown.add("paths").add("accessibility");
     focus = CATEGORY_IDS.filter((c) => shown.has(c) && !hidden.has(c));
   } else if (hidden.size) {
@@ -177,8 +190,8 @@ Map categories (ids): ${CATEGORIES.map((c) => `${c.id} (${c.label})`).join(", ")
 "Barriers" or "obstacles" means paths and accessibility.
 
 Rules:
-- Return the complete set of needs after the message. Keep current needs unless the student removes them ("I don't need step-free anymore").
-- Set focus only when the student asks to see or hide certain kinds of pins; when they focus on something and also have needs, include paths and accessibility. "Show everything" means every category.
+- Return the complete set of needs after the message. Keep current needs unless the student removes them ("I don't need step-free anymore", "I am not in a wheelchair").
+- When the student mentions an access need, including saying they do not have one, set focus to paths and accessibility only. Add a category they name ("and water"). Hide one they reject. "Show everything" means every category. Leave focus null only when the message says nothing about needs or pins.
 - Blind or low vision students should get voice and sound on. Deaf or hard of hearing students should get vibrate on and sound off.
 - Summaries are plain, warm and short. Never mention ids or JSON.`;
 
@@ -249,11 +262,18 @@ async function claudeDestination(text: string): Promise<DestinationResult> {
 
 export async function interpretNeeds(text: string, current: AssistState): Promise<NeedsResult> {
   if (!text) return keywordNeeds(text, current);
+  const keywords = keywordNeeds(text, current);
   try {
-    return await claudeNeeds(text, current);
+    const ai = await claudeNeeds(text, current);
+    // The model sometimes leaves every chip on. A sentence about needs always narrows the pins.
+    if (mentionsAccessNeed(text) && keywords.focus) {
+      const focus = keywords.focus;
+      return { ...ai, focus, summary: summarizeNeeds({ needs: ai.needs, focus, alerts: ai.alerts }, current) };
+    }
+    return ai;
   } catch (err) {
     if (claude()) console.warn("assist needs fell back to keywords:", (err as Error).message);
-    return keywordNeeds(text, current);
+    return keywords;
   }
 }
 

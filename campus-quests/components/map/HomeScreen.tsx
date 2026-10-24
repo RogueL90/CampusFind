@@ -18,12 +18,12 @@ import CompassStrip, { type CompassItem } from "@/components/hud/CompassStrip";
 import StatusCorner from "@/components/hud/StatusCorner";
 import AheadCard from "@/components/hud/AheadCard";
 import FilterChips from "@/components/hud/FilterChips";
-import AccessPanel, { DEFAULT_ACCESS_PROFILE } from "@/components/hud/AccessPanel";
+import { DEFAULT_ACCESS_PROFILE } from "@/components/hud/AccessPanel";
 import AskBar, { type AskMode } from "@/components/hud/AskBar";
 import NavCard from "@/components/hud/NavCard";
 import ReportSheet from "@/components/ReportSheet";
 import NotificationBell from "@/components/NotificationBell";
-import UserSwitcher from "@/components/UserSwitcher";
+import { DEMO_USERS, setCurrentUserId } from "@/lib/currentUser";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useLocation } from "./useLocation";
 import type { CameraTarget } from "./CampusMap";
@@ -69,15 +69,19 @@ async function ask<T>(body: object): Promise<T> {
   return (await res.json()) as T;
 }
 
+const controlButtonClass = "hud-panel relative flex w-12 flex-col items-center rounded-xl py-1.5 text-base leading-none";
+
 function ControlButton({ label, icon, onClick, active }: { label: string; icon: string; onClick: () => void; active?: boolean }) {
   return (
     <button
       onClick={onClick}
       aria-label={label}
       aria-pressed={active}
-      className={`hud-panel flex w-12 flex-col items-center rounded-xl py-1.5 text-base leading-none ${active ? "ring-1 ring-cyan-300 text-cyan-200" : "text-slate-100"}`}
+      className={`${controlButtonClass} ${active ? "ring-1 ring-cyan-300 text-cyan-200" : "text-slate-100"}`}
     >
-      <span aria-hidden>{icon}</span>
+      <span className="grid h-4 w-4 place-items-center leading-none" aria-hidden>
+        {icon}
+      </span>
       <span className="mt-1 font-mono text-[8px] uppercase tracking-wider text-slate-400">{label}</span>
     </button>
   );
@@ -93,7 +97,11 @@ function ReportDeepLink({ onOpen }: { onOpen: (id: string) => void }) {
 }
 
 export default function HomeScreen() {
-  const userId = useCurrentUser().id;
+  const user = useCurrentUser();
+  const userId = user.id;
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [userMenu, setUserMenu] = useState(false);
+  const profileBox = useRef<HTMLDivElement>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [alerts, setAlerts] = useState<AccessAlert[]>([]);
   const [profile, updateProfile] = useLocalStore("cq-access-profile", DEFAULT_ACCESS_PROFILE);
@@ -111,7 +119,6 @@ export default function HomeScreen() {
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cameraTarget, setCameraTarget] = useState<CameraTarget | null>(null);
-  const [showAccess, setShowAccess] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -130,6 +137,22 @@ export default function HomeScreen() {
       unsubscribe();
     };
   }, [userId]);
+
+  useEffect(() => {
+    if (!userMenu) return;
+    const close = (e: PointerEvent) => {
+      if (!profileBox.current?.contains(e.target as Node)) setUserMenu(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setUserMenu(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [userMenu]);
 
   const showToast = useCallback((text: string, ms = 2600) => {
     setToast(text);
@@ -157,7 +180,7 @@ export default function HomeScreen() {
     const found = findAhead(readings, loc.heading);
     return found && !dismissed.has(found.id) && !hidden.has(found.obstacle.report.category) ? found : null;
   }, [readings, loc.heading, dismissed, hidden]);
-  const alerting = profile.alertsOn && ahead !== null;
+  const alerting = ahead !== null;
   const nearestRelevant = readings.find((r) => r.obstacle.relevant) ?? null;
 
   const route = useMemo(
@@ -257,9 +280,13 @@ export default function HomeScreen() {
       return;
     }
     if (loc.simulating) loc.stopSim();
-    setFollow(false);
+    resetAlertMemory();
+    setDismissed(new Set());
+    setFocusedId(null);
     setSelectedId(null);
     setNavTarget(target);
+    setFollow(true);
+    loc.startSim(r.path);
     const intro = `${r.destination.label}: ${Math.round(r.distanceM / 10) * 10} meters, about ${r.etaMin} minute${r.etaMin === 1 ? "" : "s"}${r.stepFree ? ", step-free" : ""}.`;
     const skipped = r.skipped.length ? ` Skipping ${r.skipped.map((a) => a.label).join(", ")}, reported broken.` : "";
     if (profile.voice) speak(`${intro}${skipped} ${r.steps[0].text}.`);
@@ -362,24 +389,61 @@ export default function HomeScreen() {
             )}
             {loc.error && <div className="hud-panel w-44 rounded-lg px-2 py-1 text-[10px] text-rose-300">{loc.error}</div>}
           </div>
-          <div className="pointer-events-auto flex flex-col items-end gap-2">
-            <div className="flex gap-1.5">
-              <NotificationBell />
-              <UserSwitcher compact />
-            </div>
-            <ControlButton label="Alerts" icon="♿" onClick={() => setShowAccess(true)} active={profile.needs.length > 0} />
-            <ControlButton label={profile.flat ? "3D" : "2D"} icon={profile.flat ? "🧊" : "🗺️"} onClick={() => updateProfile({ flat: !profile.flat })} />
-            <ControlButton label="North" icon="🧭" onClick={() => flyTo(undefined, { bearing: 0 })} />
-            <ControlButton
-              label="Locate"
-              icon="📍"
-              active={loc.source === "gps"}
+          <div ref={profileBox} className="pointer-events-auto relative flex flex-col items-end gap-2">
+            <button
+              type="button"
+              aria-label={`Profile, ${user.display_name}`}
+              aria-expanded={toolsOpen}
+              aria-haspopup="menu"
               onClick={() => {
-                loc.startGps();
-                setFollow(true);
+                setUserMenu(false);
+                setToolsOpen((open) => !open);
               }}
-            />
-            <ControlButton label={loc.simulating ? "Stop" : "Walk"} icon={loc.simulating ? "⏹" : "🚶"} active={loc.simulating} onClick={loc.simulating ? stopWalk : startWalk} />
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setToolsOpen(false);
+                setUserMenu((open) => !open);
+              }}
+              className={`${controlButtonClass} ${toolsOpen ? "ring-1 ring-cyan-300 text-cyan-200" : "text-slate-100"}`}
+            >
+              <span className="grid h-4 w-4 place-items-center rounded-full bg-cyan-400 text-[10px] font-semibold leading-none text-slate-950" aria-hidden>
+                {user.display_name[0]}
+              </span>
+              <span className="mt-1 font-mono text-[8px] uppercase tracking-wider text-slate-400">Profile</span>
+            </button>
+            {userMenu && (
+              <div role="menu" aria-label="Switch demo user" className="hud-panel absolute right-full top-0 z-30 mr-2 w-44 overflow-hidden rounded-xl py-1">
+                {DEMO_USERS.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setCurrentUserId(u.id);
+                      setUserMenu(false);
+                    }}
+                    className={`block w-full px-3 py-2 text-left text-xs ${u.id === user.id ? "bg-cyan-400/15 font-semibold text-cyan-100" : "text-slate-200"}`}
+                  >
+                    {u.display_name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {toolsOpen && (
+              <>
+                <NotificationBell stacked />
+                <ControlButton label={profile.flat ? "3D" : "2D"} icon={profile.flat ? "🧊" : "🗺️"} onClick={() => updateProfile({ flat: !profile.flat })} />
+                <ControlButton
+                  label="Locate"
+                  icon="📍"
+                  active={loc.source === "gps"}
+                  onClick={() => {
+                    loc.startGps();
+                    setFollow(true);
+                  }}
+                />
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -425,7 +489,6 @@ export default function HomeScreen() {
         <ReportDeepLink onOpen={openFromLink} />
       </Suspense>
       {selected && <ReportSheet key={selected.id} report={selected} onClose={() => setSelectedId(null)} />}
-      {showAccess && <AccessPanel profile={profile} onChange={updateProfile} onClose={() => setShowAccess(false)} />}
       {toast && (
         <div className="hud-panel absolute left-1/2 top-24 z-40 -translate-x-1/2 rounded-full px-4 py-2 text-xs text-cyan-100" role="status">
           {toast}

@@ -4,11 +4,20 @@ import { clampText, interpretDestination, interpretNeeds, keywordDestination, ke
 const NONE: AssistState = { needs: [], hidden: [] };
 
 describe("keywordNeeds", () => {
-  it("turns on wheelchair routing", () => {
+  it("turns on wheelchair routing and keeps only path and access pins", () => {
     const r = keywordNeeds("I use a wheelchair", NONE);
     expect(r.needs).toEqual(["wheelchair"]);
-    expect(r.focus).toBeNull();
+    expect(r.focus).toEqual(["paths", "accessibility"]);
     expect(r.summary).toMatch(/wheelchair routes on/i);
+    expect(r.summary).toMatch(/Other pins hidden/);
+  });
+
+  it("narrows pins when the student is not in a wheelchair", () => {
+    const r = keywordNeeds("I am not in a wheelchair", { needs: ["wheelchair"], hidden: [] });
+    expect(r.needs).toEqual([]);
+    expect(r.focus).toEqual(["paths", "accessibility"]);
+    expect(r.focus).not.toContain("water");
+    expect(r.focus).not.toContain("waste");
   });
 
   it("handles blind + water, with voice and sound", () => {
