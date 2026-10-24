@@ -4,6 +4,30 @@ import { useState } from "react";
 import { getReport, submitProof } from "@/lib/mock";
 import type { Mission, NewProof } from "@/lib/types";
 
+async function proofPhotoDataUrl(file: File) {
+ let width: number; let height: number; let draw: (context: CanvasRenderingContext2D, width: number, height: number) => void; let release: () => void = () => {};
+ try {
+  const bitmap = await createImageBitmap(file);
+  width = bitmap.width; height = bitmap.height;
+  draw = (context, targetWidth, targetHeight) => context.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+  release = () => bitmap.close();
+ } catch {
+  const source = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read the proof image.")); reader.onerror = () => reject(new Error("Could not read the proof image.")); reader.readAsDataURL(file); });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => { const element = new Image(); element.onload = () => resolve(element); element.onerror = () => reject(new Error("The selected proof image could not be decoded.")); element.src = source; });
+  width = image.naturalWidth; height = image.naturalHeight;
+  draw = (context, targetWidth, targetHeight) => context.drawImage(image, 0, 0, targetWidth, targetHeight);
+ }
+ const scale = Math.min(1, 900 / Math.max(width, height));
+ const canvas = document.createElement("canvas");
+ canvas.width = Math.max(1, Math.round(width * scale));
+ canvas.height = Math.max(1, Math.round(height * scale));
+ const context = canvas.getContext("2d");
+ if (!context) throw new Error("Could not process the selected proof image.");
+ draw(context, canvas.width, canvas.height);
+ release();
+ return canvas.toDataURL("image/jpeg", 0.72);
+}
+
 export function ProofCapture({ mission, onClose, onSubmitted }: { mission: Mission; onClose: () => void; onSubmitted: () => void }) {
  const [photo, setPhoto] = useState<File>(); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
  async function send() {
@@ -17,7 +41,7 @@ export function ProofCapture({ mission, onClose, onSubmitted }: { mission: Missi
    const testLocation = { lat: report.lat, lng: report.lng };
    const meters = distance([testLocation.lng, testLocation.lat], [report.lng, report.lat], { units: "meters" });
    if (meters > 50) throw new Error(`You are ${Math.round(meters)} m from the report pin. Proof must be captured within 50 m.`);
-   const proof: NewProof = { photo_url: URL.createObjectURL(photo), lat: testLocation.lat, lng: testLocation.lng };
+    const proof: NewProof = { photo_url: await proofPhotoDataUrl(photo), lat: testLocation.lat, lng: testLocation.lng };
    await submitProof(mission.id, proof);
    onSubmitted();
   } catch (err) { setError(err instanceof Error ? err.message : "Unable to submit proof."); }
