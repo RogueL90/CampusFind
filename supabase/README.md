@@ -3,7 +3,7 @@
 1. Create a Supabase project (free tier).
 2. SQL editor → paste and run `schema.sql`. It enables PostGIS, creates every table, view and function, turns on Realtime for the live tables and creates the public `photos` bucket.
 3. SQL editor → run `seed.sql`. **Run it again before every rehearsal** to reset the demo (Leo back to 60 points with a teal Hydro Flask to check in using code `482731`, AirPods lost report open, no live reports).
-4. Copy Project Settings → API → Project URL and the anon public key into `campus-quests/.env.local`, then restart `npm run dev`. `lib/data.ts` switches from the in-browser mock to `lib/db.ts` automatically when both are set.
+4. Copy Project Settings → API → Project URL and the anon public key into `.env.local`, then restart `npm run dev`. `lib/data.ts` switches from the in-browser mock to `lib/db.ts` automatically when both are set.
 
 ## Demo data
 - Obstacles (section 4 of `seed.sql`) use the same OpenStreetMap-traced geometry as `DEMO_GEOMETRY` in `lib/geo/campus.ts`. Paste coordinates as `lng lat` pairs if you change them.

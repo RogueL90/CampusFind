@@ -33,6 +33,28 @@ describe("triage kind", () => {
     expect(normalizeTriage({ report_kind: "found" }, "lost", "claude").kind).toBe("lost");
   });
 
+  it("marks litter student solvable and dangerous work unsolvable", () => {
+    const solvable = (note: string) => normalizeTriage(mockTriage(note, "issue"), null, "mock").student_solvable;
+    expect(solvable("litter all over the lawn after the event")).toBe(true);
+    expect(solvable("trash overflowing around the bin")).toBe(true);
+    expect(solvable("construction fence closed off the path")).toBe(false);
+    expect(solvable("needle in the grass by the bench")).toBe(false);
+    expect(solvable("broken glass near the trash")).toBe(false);
+    expect(solvable("rats by the dumpster")).toBe(false);
+  });
+
+  it("never lets the model call hazardous or big jobs student solvable", () => {
+    const claudeSays = (raw: Parameters<typeof normalizeTriage>[0]) =>
+      normalizeTriage({ ...raw, student_solvable: true, solvable_reason: "Easy" }, null, "claude");
+    expect(claudeSays({ category: "construction", severity: 1 }).student_solvable).toBe(false);
+    expect(claudeSays({ category: "garbage", severity: 1, hazard_flags: ["biohazard"] }).student_solvable).toBe(false);
+    expect(claudeSays({ category: "garbage", severity: 4 }).student_solvable).toBe(false);
+    const overruled = claudeSays({ category: "open_manhole", severity: 1 });
+    expect(overruled.solvable_reason).not.toBe("Easy");
+    expect(normalizeTriage({ category: "garbage", severity: 1, student_solvable: false }, null, "claude").student_solvable).toBe(false);
+    expect(normalizeTriage({ report_kind: "found", student_solvable: true }, null, "claude").student_solvable).toBe(false);
+  });
+
   it("detects the kind offline without being told", async () => {
     const prev = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;

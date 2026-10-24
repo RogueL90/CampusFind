@@ -1,4 +1,4 @@
--- Campus Quests: demo seed (Person B)
+-- CampusFind: demo seed (Person B)
 -- Run after schema.sql. Re-running it resets the demo to its starting state
 -- (do that before each rehearsal).
 --
@@ -269,9 +269,36 @@ insert into missions (id, report_id, mission_type, title, points, proof_required
 insert into points_ledger (user_id, delta, reason, report_id, state, created_at) values
   ('a0000000-0000-4000-8000-000000000002', 50, 'return_checkin', null, 'spendable', now() - interval '6 days'),
   ('a0000000-0000-4000-8000-000000000002', 10, 'mission:access_check', null, 'spendable', now() - interval '4 days'),
-  ('a0000000-0000-4000-8000-000000000001', 10, 'mission:tidy', null, 'spendable', now() - interval '5 days'),
   ('a0000000-0000-4000-8000-000000000001', 5, 'mission:verify', null, 'spendable', now() - interval '3 days'),
   ('a0000000-0000-4000-8000-000000000005', 50, 'return_checkin', 'b0000000-0000-4000-8000-000000000025', 'spendable', now() - interval '47 hours');
+
+-- ---------------------------------------------------------------------------
+-- 7. Volunteering: Maya is on the Campus Cleanup Crew (Facilities Custodial) with one approved
+--    cleanup. Leo hasn't registered anywhere, so claiming a cleanup as Leo shows the sign-up.
+-- ---------------------------------------------------------------------------
+insert into volunteer_registrations (user_id, authority_id, registered_at) values
+  ('a0000000-0000-4000-8000-000000000001', 'fdo_custodial', now() - interval '6 days');
+
+insert into missions (id, report_id, mission_type, title, points, proof_required, status, claimed_by, claimed_at, claim_expires_at, completed_at, created_at) values
+  ('c0000000-0000-4000-8000-000000000011', 'b0000000-0000-4000-8000-000000000010', 'tidy',
+   'Quick tidy: return the chairs in the Student Union study room', 10, 'Before and after photos', 'completed',
+   'a0000000-0000-4000-8000-000000000001', now() - interval '5 days 20 minutes', now() - interval '4 days 23 hours 50 minutes',
+   now() - interval '5 days', now() - interval '5 days 1 hour');
+
+insert into points_ledger (user_id, delta, reason, mission_id, report_id, state, created_at) values
+  ('a0000000-0000-4000-8000-000000000001', 10, 'mission:tidy', 'c0000000-0000-4000-8000-000000000011',
+   'b0000000-0000-4000-8000-000000000010', 'spendable', now() - interval '5 days');
+
+-- Claude's reason each pin is, or isn't, student solvable
+update reports set solvable_reason = v.reason
+from (values
+  ('b0000000-0000-4000-8000-000000000001', 'A volunteer can check whether it works and photograph it.'),
+  ('b0000000-0000-4000-8000-000000000005', 'A volunteer can check it with a speed test at the spot.'),
+  ('b0000000-0000-4000-8000-000000000008', 'The bin itself needs emptying with custodial equipment. Trash spilled around it would be a student task.'),
+  ('b0000000-0000-4000-8000-000000000009', 'Loose wrappers and cups, nothing sharp: a volunteer with gloves and a bag can clear it.'),
+  ('b0000000-0000-4000-8000-000000000010', 'A few chairs to put back: quick and safe for a volunteer.')
+) as v(id, reason)
+where reports.id = v.id::uuid;
 
 -- A welcome notification so the inbox isn't empty
 insert into notifications (user_id, text, link, created_at) values

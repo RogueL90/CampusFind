@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useState } from "react";
 import PageShell, { Empty, ErrorNote } from "@/components/PageShell";
 import Photo from "@/components/Photo";
+import { SolvabilityBadge } from "@/components/Solvability";
 import { AUTHORITIES, AUTHORITY_IDS, authorityName, categoryLabel, type AuthorityId } from "@/lib/categories";
 import { getReportsForAuthority, subscribeReports } from "@/lib/data";
+import { PRIVATE_LISTING } from "@/lib/visibility";
 import { statusLabel, timeAgo } from "@/lib/status";
 import { useLive } from "@/lib/useLive";
 
@@ -42,6 +44,11 @@ export default function AuthoritiesPage() {
                   {categoryLabel(r.issue_type ?? r.category)}
                   {r.severity != null && ` · severity ${r.severity}/5`} · {r.routed_to === authority ? "assigned" : "cc"}
                 </p>
+                {r.kind === "issue" && (
+                  <div className="mt-1">
+                    <SolvabilityBadge fixPath={r.fix_path} />
+                  </div>
+                )}
                 <p className="text-sm font-semibold text-white">{r.report_subject ?? r.title}</p>
                 <p className="text-[11px] text-slate-500">
                   {statusLabel(r.status)} · {timeAgo(r.created_at)}
@@ -50,8 +57,10 @@ export default function AuthoritiesPage() {
               </div>
             </div>
             {r.routing_reason && <p className="mt-2 text-xs italic text-cyan-200/80">Why here: {r.routing_reason}</p>}
-            {r.cc.length > 0 && (
-              <p className="mt-1 text-[11px] text-slate-400">Also sent to {r.cc.map(authorityName).join(", ")}</p>
+            {r.cc.filter((id) => id !== PRIVATE_LISTING).length > 0 && (
+              <p className="mt-1 text-[11px] text-slate-400">
+                Also sent to {r.cc.filter((id) => id !== PRIVATE_LISTING).map(authorityName).join(", ")}
+              </p>
             )}
             {r.report_body && (
               <pre className="mt-3 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-xl bg-black/30 p-3 font-sans text-xs text-slate-300">{r.report_body}</pre>

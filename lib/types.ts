@@ -95,6 +95,14 @@ export interface Report {
   report_body: string | null;
   /** Blur the photo for everyone except the reporter. */
   contains_sensitive: boolean;
+  /** Claude's one-line reason it is, or isn't, a task a student volunteer can safely do. */
+  solvable_reason?: string | null;
+  /**
+   * Lost and found only. True puts the item on every student's map.
+   * False keeps it anonymous: only the owner and staff can see it.
+   * Missing means public, so older reports stay on the map.
+   */
+  public_map?: boolean;
   status: ReportStatus;
   created_at: string;
   votes: number;
@@ -132,6 +140,7 @@ export interface NewReport {
   report_subject?: string;
   report_body?: string;
   contains_sensitive?: boolean;
+  solvable_reason?: string;
   // lost & found only
   radius_m?: number;
   item_category?: string;
@@ -142,6 +151,8 @@ export interface NewReport {
   lost_to?: string;
   /** Found item left for another student to carry to the office. */
   leave_for_delivery?: boolean;
+  /** Lost and found: show the pin to every student. Defaults to true. */
+  public_map?: boolean;
 }
 
 export interface NewProof {
@@ -223,6 +234,14 @@ export interface Reward {
   stock: number | null;
 }
 
+/** A student's registration with one department's volunteer program, with the work it credited. */
+export interface VolunteerRecord {
+  authority_id: string;
+  registered_at: string;
+  tasks_completed: number;
+  service_minutes: number;
+}
+
 export interface Redemption {
   id: string;
   reward_id: string;
@@ -292,6 +311,9 @@ export type Triage = {
   report_subject: string;
   report_body: string;
   contains_sensitive: boolean;
+  /** Claude: a student volunteer could safely fix or check this. lib/fixPath.ts has the final say. */
+  student_solvable: boolean;
+  solvable_reason: string;
   color: string | null;
   brand: string | null;
   marks: string | null;

@@ -1,4 +1,4 @@
--- Campus Quests: Supabase schema (Person B)
+-- CampusFind: Supabase schema (Person B)
 -- Run once in the Supabase SQL editor, then run seed.sql.
 -- Safe to re-run: it drops and recreates everything in the public schema it owns.
 --
@@ -13,9 +13,9 @@ set search_path = public, extensions;
 -- ---------------------------------------------------------------------------
 -- Clean slate
 -- ---------------------------------------------------------------------------
-drop view if exists reports_geo, access_alerts_geo, demo_paths_geo, balances, proofs_review cascade;
+drop view if exists reports_geo, access_alerts_geo, demo_paths_geo, balances, proofs_review, volunteer_summary cascade;
 drop table if exists
-  fix_path_overrides, notifications, access_profiles, access_alerts, demo_paths,
+  volunteer_registrations, fix_path_overrides, notifications, access_profiles, access_alerts, demo_paths,
   status_events, redemptions, rewards, points_ledger, mission_proofs, missions,
   matches, items, report_checks, report_votes, reports, users cascade;
 drop type if exists fix_path cascade;
@@ -58,6 +58,8 @@ create table reports (
   report_subject     text,               -- the written report sent to the authority
   report_body        text,
   contains_sensitive boolean not null default false,
+  public_map         boolean not null default true,  -- lost/found: false stays off other students' maps
+  solvable_reason    text,               -- the AI's reason it is (or isn't) student solvable
   status             text not null default 'submitted',
   created_at         timestamptz not null default now()
 );
@@ -220,6 +222,29 @@ create table notifications (
 );
 create index notifications_user_idx on notifications (user_id, created_at desc);
 
+-- Students registered with a department's volunteer program (register_volunteer). Only registered
+-- volunteers can claim that department's student-solvable (self_fixable) tasks.
+create table volunteer_registrations (
+  user_id       uuid not null references users(id) on delete cascade,
+  authority_id  text not null,             -- authority id from lib/categories.ts
+  agreed_rules  boolean not null default true,
+  registered_at timestamptz not null default now(),
+  primary key (user_id, authority_id)
+);
+
+-- Same lists as lib/volunteer.ts.
+create or replace function volunteer_departments() returns text[]
+language sql immutable as $$ select array['fdo_custodial', 'fdo_grounds', 'fdo_maintenance', 'it_services', 'housing'] $$;
+
+create or replace function service_minutes(p_type text) returns int
+language sql immutable as $$
+  select case p_type when 'tidy' then 15 when 'verify' then 5 when 'access_check' then 5 else 0 end
+$$;
+
+-- Student-solvable work needs a registration; lost-and-found runs and access checks don't.
+create or replace function is_volunteer_task(p_fix fix_path, p_type text) returns boolean
+language sql immutable as $$ select p_fix = 'self_fixable' and p_type in ('tidy', 'verify') $$;
+
 -- Every moderator fix_path change, so the allowlist can be tuned.
 create table fix_path_overrides (
   id           bigint generated always as identity primary key,
@@ -246,7 +271,7 @@ select
   st_asgeojson(r.footprint)::jsonb as footprint,
   r.building, r.floor, r.fix_path, r.hazard_flags, r.access_impact, r.routed_to,
   r.cc, r.identified, r.routing_reason, r.report_subject, r.report_body,
-  r.contains_sensitive, r.status, r.created_at,
+  r.contains_sensitive, r.public_map, r.status, r.created_at,
   (select count(*) from report_votes v where v.report_id = r.id)::int as votes,
   lc.at as last_checked_at,
   lc.still_there as last_check_still,
@@ -263,7 +288,8 @@ select
   case when m.status = 'claimed' and m.claim_expires_at < now() then null else m.claimed_by end as claimed_by,
   case when m.status = 'claimed' and m.claim_expires_at < now() then null else m.claim_expires_at end as claim_expires_at,
   i.category as item_category, i.color, i.brand, i.marks, i.radius_m, i.whereabouts,
-  i.lost_from, i.lost_to
+  i.lost_from, i.lost_to,
+  r.solvable_reason
 from reports r
 left join lateral (
   select * from missions mm
@@ -305,6 +331,22 @@ select
 from users u
 left join points_ledger l on l.user_id = u.id
 group by u.id;
+
+-- Each volunteer registration with the approved student-solvable work it credited.
+create view volunteer_summary as
+select
+  v.user_id, v.authority_id, v.registered_at,
+  coalesce(w.tasks_completed, 0) as tasks_completed,
+  coalesce(w.service_minutes, 0) as service_minutes
+from volunteer_registrations v
+left join lateral (
+  select count(*)::int as tasks_completed, sum(service_minutes(m.mission_type))::int as service_minutes
+  from missions m
+  join reports r on r.id = m.report_id
+  where m.claimed_by = v.user_id and m.status = 'completed'
+    and coalesce(r.routed_to, 'fdo_maintenance') = v.authority_id
+    and is_volunteer_task(r.fix_path, m.mission_type)
+) w on true;
 
 -- Moderator queue: proofs with their mission and report.
 create view proofs_review as
@@ -431,7 +473,7 @@ end $$;
 
 -- p: { kind, category, issue_type?, severity?, title, description?, photo_urls?, lat, lng,
 --      building?, floor?, fix_path?, hazard_flags?, access_impact?, routed_to?, cc?, identified?,
---      routing_reason?, report_subject?, report_body?, contains_sensitive?,
+--      routing_reason?, report_subject?, report_body?, contains_sensitive?, public_map?, solvable_reason?,
 --      radius_m?, item_category?, color?, brand?, marks?, lost_from?, lost_to?, leave_for_delivery? }
 create or replace function create_report(p_reporter uuid, p jsonb) returns setof reports_geo
 language plpgsql set search_path = public, extensions as $$
@@ -475,7 +517,7 @@ begin
   insert into reports (
     reporter_id, kind, category, issue_type, severity, title, description, photo_urls,
     location, building, floor, fix_path, hazard_flags, access_impact, routed_to,
-    cc, identified, routing_reason, report_subject, report_body, contains_sensitive
+    cc, identified, routing_reason, report_subject, report_body, contains_sensitive, public_map, solvable_reason
   ) values (
     p_reporter, v_kind,
     coalesce(p->>'category', case when v_kind = 'issue' then 'other' else 'lost_found' end),
@@ -496,7 +538,9 @@ begin
     p->>'routing_reason',
     p->>'report_subject',
     p->>'report_body',
-    coalesce((p->>'contains_sensitive')::boolean, false)
+    coalesce((p->>'contains_sensitive')::boolean, false),
+    case when v_kind = 'issue' then true else coalesce((p->>'public_map')::boolean, true) end,
+    p->>'solvable_reason'
   ) returning id into v_id;
 
   insert into status_events (report_id, from_status, to_status, actor_id)
@@ -610,12 +654,15 @@ begin
   end if;
 end $$;
 
--- 30-minute lock; no claiming your own report; one active claim per student.
+-- 30-minute lock; no claiming your own report; one active claim per student; student-solvable
+-- tasks only for students registered with the report's department.
 create or replace function claim_mission(p_mission uuid, p_user uuid) returns missions
 language plpgsql set search_path = public, extensions as $$
 declare
   m missions;
   v_reporter uuid;
+  v_fix fix_path;
+  v_dept text;
 begin
   perform assert_not_banned(p_user);
   perform 1 from users where id = p_user for update;  -- serialize this student's claims
@@ -631,9 +678,16 @@ begin
     raise exception 'Someone else is already on this mission';
   end if;
 
-  select reporter_id into v_reporter from reports where id = m.report_id;
+  select reporter_id, fix_path, coalesce(routed_to, 'fdo_maintenance')
+  into v_reporter, v_fix, v_dept
+  from reports where id = m.report_id;
   if v_reporter = p_user then
     raise exception 'You cannot claim a mission on your own report';
+  end if;
+  if is_volunteer_task(v_fix, m.mission_type) and not exists (
+    select 1 from volunteer_registrations where user_id = p_user and authority_id = v_dept
+  ) then
+    raise exception 'Register to volunteer with this department before claiming this task';
   end if;
 
   if exists (
@@ -708,6 +762,7 @@ declare
   pr mission_proofs;
   m missions;
   r reports;
+  v_service int;
 begin
   select * into pr from mission_proofs where id = p_proof for update;
   if not found then
@@ -731,7 +786,15 @@ begin
   if p_approve then
     update missions set status = 'completed', completed_at = now() where id = m.id;
     perform set_report_status(r.id, case when m.mission_type = 'tidy' then 'resolved' else 'verified' end, p_moderator);
-    perform notify_user(pr.helper_id, format('+%s points approved: %s', m.points, m.title), '/missions');
+    v_service := case when is_volunteer_task(r.fix_path, m.mission_type) then service_minutes(m.mission_type) else 0 end;
+    perform notify_user(
+      pr.helper_id,
+      case when v_service > 0
+        then format('+%s points and %s min of community service approved: %s', m.points, v_service, m.title)
+        else format('+%s points approved: %s', m.points, m.title)
+      end,
+      '/missions'
+    );
     if r.reporter_id is not null and r.reporter_id <> pr.helper_id then
       perform notify_user(r.reporter_id, format('A student checked your report: %s', r.title), '/?report=' || r.id);
     end if;
@@ -976,6 +1039,21 @@ begin
   end if;
 end $$;
 
+-- Joins a department's volunteer program after the student agrees to its safety rules.
+create or replace function register_volunteer(p_user uuid, p_authority text) returns void
+language plpgsql set search_path = public, extensions as $$
+begin
+  perform assert_not_banned(p_user);
+  if not (p_authority = any (volunteer_departments())) then
+    raise exception 'This department doesn''t take student volunteers';
+  end if;
+  insert into volunteer_registrations (user_id, authority_id) values (p_user, p_authority)
+  on conflict do nothing;
+  if found then
+    perform notify_user(p_user, 'You''re registered as a volunteer. You can now claim this department''s student-solvable tasks.', '/missions');
+  end if;
+end $$;
+
 -- Moderator override, logged so the allowlist can be tuned.
 create or replace function override_fix_path(p_report uuid, p_to fix_path, p_moderator uuid, p_reason text default null)
 returns void
@@ -1013,7 +1091,7 @@ begin
   foreach t in array array[
     'users', 'reports', 'report_votes', 'report_checks', 'items', 'matches', 'missions', 'mission_proofs',
     'points_ledger', 'rewards', 'redemptions', 'status_events', 'access_alerts',
-    'access_profiles', 'demo_paths', 'notifications', 'fix_path_overrides'
+    'access_profiles', 'demo_paths', 'notifications', 'fix_path_overrides', 'volunteer_registrations'
   ] loop
     execute format('alter table %I enable row level security', t);
     execute format('create policy demo_all on %I for all using (true) with check (true)', t);
@@ -1030,7 +1108,7 @@ begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     foreach t in array array[
       'reports', 'missions', 'matches', 'points_ledger', 'notifications',
-      'report_votes', 'report_checks', 'items', 'access_alerts'
+      'report_votes', 'report_checks', 'items', 'access_alerts', 'volunteer_registrations'
     ] loop
       if not exists (
         select 1 from pg_publication_tables

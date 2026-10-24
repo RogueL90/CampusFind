@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Campus Quests · SJSU",
+  title: "CampusFind · SJSU",
   description: "A 3D HUD map of campus problems, lost & found missions and accessibility alerts.",
-  appleWebApp: { capable: true, title: "Campus Quests", statusBarStyle: "black-translucent" },
+  appleWebApp: { capable: true, title: "CampusFind", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {

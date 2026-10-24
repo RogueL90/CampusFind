@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LngLatBounds, Map as MapLibreMap, Marker, type GeoJSONSource, type MapLayerMouseEvent } from "maplibre-gl";
+import type { ExpressionSpecification } from "@maplibre/maplibre-gl-style-spec";
 import type { LineString } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { DEFAULT_CAMERA, MAP_STYLE_URL, OBSTACLE_COLORS, type LngLat } from "@/lib/geo/campus";
@@ -53,10 +54,10 @@ const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2
 const NO_TRANSITION = { duration: 0, delay: 0 };
 
 /** Height is baked per tile, so a per-frame expression snaps. A zoom stop is interpolated on the GPU as the camera moves. */
-const RISING_HEIGHT = ["interpolate", ["linear"], ["zoom"], INTRO_ZOOM_START, 0, INTRO_ZOOM_FULL, ["to-number", ["get", "render_height"], 0]];
-const RISING_BASE = ["interpolate", ["linear"], ["zoom"], INTRO_ZOOM_START, 0, INTRO_ZOOM_FULL, ["to-number", ["get", "render_min_height"], 0]];
+const RISING_HEIGHT: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], INTRO_ZOOM_START, 0, INTRO_ZOOM_FULL, ["to-number", ["get", "render_height"], 0]];
+const RISING_BASE: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"], INTRO_ZOOM_START, 0, INTRO_ZOOM_FULL, ["to-number", ["get", "render_min_height"], 0]];
 
-function setBuildingPaint(map: MapLibreMap, height: unknown, base: unknown) {
+function setBuildingPaint(map: MapLibreMap, height: ExpressionSpecification, base: ExpressionSpecification) {
   if (!map.getLayer(BUILDING_LAYER)) return;
   map.setPaintProperty(BUILDING_LAYER, "fill-extrusion-height-transition", NO_TRANSITION);
   map.setPaintProperty(BUILDING_LAYER, "fill-extrusion-base-transition", NO_TRANSITION);
@@ -307,7 +308,8 @@ export default function CampusMap(props: CampusMapProps) {
     const releaseIntroForGesture = (e: { originalEvent?: Event }) => {
       if (!introRef.current || !e.originalEvent) return;
       finishIntro();
-      map.stop(true);
+      // allowGestures keeps the drag that interrupted the intro; the public typing omits the parameter.
+      (map as unknown as { stop(allowGestures?: boolean): void }).stop(true);
     };
 
     map.on("style.load", () => {

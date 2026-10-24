@@ -17,6 +17,7 @@ import {
   type IssueCategory,
   type TriageCategory,
 } from "./categories";
+import { fixPath } from "./fixPath";
 import { HAZARD_FLAGS, type ReportKind, type Triage } from "./types";
 
 export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
@@ -50,6 +51,8 @@ const TriageSchema = z.object({
   report_subject: z.string(),
   report_body: z.string(),
   contains_sensitive: z.boolean(),
+  student_solvable: z.boolean().describe("True only if a student volunteer could safely fix or check this themselves."),
+  solvable_reason: z.string().describe("One short sentence for the student: why they can or can't do this."),
   color: z.string().nullable(),
   brand: z.string().nullable(),
   marks: z.string().nullable(),
@@ -87,6 +90,8 @@ Fields:
 - hazard_flags: only hazards you can see or that the category implies (e.g. dead_animal implies biohazard, open_manhole implies heights).
 - access_impact: who this blocks (wheelchair, low_vision, no_stairs, crutches); empty if nobody.
 - contains_sensitive: true if the photo shows an ID card, payment card, a screen with personal information, a license plate, or a person's face.
+- student_solvable: can a student volunteer, registered with the department, safely deal with this themselves in under 20 minutes with only gloves, a trash bag or their phone? True for small, simple jobs: picking up loose litter, bagging trash around an overflowing bin, putting chairs back, checking whether a bottle filler works, running a Wi-Fi speed test. False for anything that needs trained staff, tools, chemicals, ladders or heavy lifting, or that could hurt them: construction, potholes and sidewalk damage, leaks and flooding, anything electrical, broken glass, needles, bodily fluids, pests, dead animals, graffiti removal, broken fixtures and equipment, traffic, restricted areas, and anything with a hazard flag. When unsure, false. Lost and found items are always false.
+- solvable_reason: one short, plain sentence the student reads, e.g. "Loose litter, no sharp objects: a volunteer with gloves can bag it." or "Live wiring needs an electrician."
 - color, brand, marks: for lost/found items only, null for issues. color is one or two words ("white", "matte black"); brand is just the brand name ("Apple") or null if you can't tell; marks is a short phrase listing identifying marks (stickers, case, engravings, damage) or null if none. These are matched against other reports, so keep them terse.
 
 The report (report_subject, report_body) goes straight to the authority's work queue, so write it for staff, not for the student:
@@ -158,16 +163,21 @@ export function normalizeTriage(raw: Partial<z.infer<typeof TriageSchema>>, forc
   const validAuthority = (a: unknown): a is AuthorityId => AUTHORITY_IDS.includes(a as AuthorityId);
   const routed_to = isItem ? "lost_found" : validAuthority(raw.routed_to) ? raw.routed_to : defaultAuthority(category);
   const sev = Math.round(Number(raw.severity));
+  const severity = isItem ? 1 : Number.isFinite(sev) ? Math.min(5, Math.max(1, sev)) : 3;
   const title = str(raw.title) ?? (isItem ? `${kind === "lost" ? "Lost" : "Found"} item` : "Campus issue");
   const identified = str(raw.identified) ?? "";
+  const hazard_flags = raw.hazard_flags ?? [];
+  // The model's answer when it gave one; the safety rules alone otherwise. fixPath re-checks either way.
+  const passesRules = fixPath({ kind, category, severity, hazard_flags, routed_to }) === "self_fixable";
+  const student_solvable = !isItem && passesRules && (typeof raw.student_solvable === "boolean" ? raw.student_solvable : true);
 
   return {
     kind,
     category,
     issue_type: (str(raw.issue_type) ?? (isItem ? "unknown_item" : category)).toLowerCase().replace(/[^a-z0-9]+/g, "_"),
-    severity: isItem ? 1 : Number.isFinite(sev) ? Math.min(5, Math.max(1, sev)) : 3,
+    severity,
     title,
-    hazard_flags: raw.hazard_flags ?? [],
+    hazard_flags,
     access_impact: raw.access_impact ?? [],
     routed_to,
     cc: (raw.cc ?? []).filter((a) => validAuthority(a) && a !== routed_to),
@@ -176,6 +186,14 @@ export function normalizeTriage(raw: Partial<z.infer<typeof TriageSchema>>, forc
     report_subject: str(raw.report_subject) ?? title,
     report_body: str(raw.report_body) ?? (identified ? `Observed: ${identified}` : title),
     contains_sensitive: raw.contains_sensitive === true,
+    student_solvable,
+    solvable_reason: isItem
+      ? "Lost and found items go to the Lost & Found office."
+      : student_solvable === (raw.student_solvable === true) && str(raw.solvable_reason)
+        ? str(raw.solvable_reason)!
+        : student_solvable
+          ? "Small and safe: a registered student volunteer can handle it."
+          : "Needs trained campus staff, so it isn't a student task.",
     color: isItem ? str(raw.color) : null,
     brand: isItem ? str(raw.brand) : null,
     marks: isItem ? str(raw.marks) : null,
@@ -254,8 +272,12 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
 
   if (has("construction", "barricade", "fence", "fenced", "road work", "roadwork", "closed off"))
     return pick("construction", 4, { hazard_flags: ["restricted_area"], access_impact: ["wheelchair", "low_vision", "crutches"] });
-  if (has("wifi", "wi-fi", "internet", "network", "eduroam")) return pick("weak_wifi", 2);
-  if (has("filler", "fountain")) return pick("bottle_filler", 1);
+  if (has("needle", "syringe", "glass", "vomit", "blood"))
+    return pick("garbage", 3, { hazard_flags: [has("needle", "syringe", "blood", "vomit") ? "biohazard" : "broken_glass"], student_solvable: false, solvable_reason: "Sharp or biohazard waste needs custodial staff." });
+  if (has("wifi", "wi-fi", "internet", "network", "eduroam"))
+    return pick("weak_wifi", 2, { student_solvable: true, solvable_reason: "A volunteer can check it with a speed test at the spot." });
+  if (has("filler", "fountain"))
+    return pick("bottle_filler", 1, { student_solvable: true, solvable_reason: "A volunteer can check whether it works and photograph it." });
   if (has("ramp", "elevator", "automatic door", "door button"))
     return pick("accessibility_barrier", 4, { access_impact: ["wheelchair", "crutches", "no_stairs"] });
   if (has("rats?", "ants", "roach", "bees", "pest")) return pick("pests", 3, { hazard_flags: ["pests"], cc: ["ehs"] });
@@ -275,7 +297,8 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
   if (has("sign")) return pick("damaged_traffic_sign", 2);
   if (has("playground", "bench", "swing")) return pick("park_playground_damage", 2);
   if (has("road", "crack")) return pick("road_damage", 3);
-  if (has("trash", "garbage", "litter", "bin")) return pick("garbage", 1);
+  if (has("trash", "garbage", "litter", "bin", "overflow", "mess", "cleanup", "clean up", "chairs"))
+    return pick("garbage", 1, { student_solvable: true, solvable_reason: "Loose trash with nothing sharp: a volunteer with gloves and a bag can tidy it." });
   return pick("other", 2);
 }
 

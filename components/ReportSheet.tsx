@@ -6,14 +6,25 @@ import FinderCard from "@/components/FinderCard";
 import Photo from "@/components/Photo";
 import { CheckButtons, Freshness } from "@/components/ReportChecks";
 import ProofCapture from "@/components/ProofCapture";
+import { SolvabilityBadge } from "@/components/Solvability";
+import VolunteerSignup from "@/components/VolunteerSignup";
 import { authorityName } from "@/lib/categories";
 import { userName } from "@/lib/currentUser";
-import { claimMission, getCheckinCode, getStatusEvents, subscribeReports, voteMeToo } from "@/lib/data";
+import {
+  claimMission,
+  getCheckinCode,
+  getStatusEvents,
+  getVolunteering,
+  registerVolunteer,
+  subscribeReports,
+  voteMeToo,
+} from "@/lib/data";
 import { CATEGORY_BY_ID } from "@/lib/geo/campus";
 import { statusLabel, timeAgo } from "@/lib/status";
 import type { Report } from "@/lib/types";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useLive } from "@/lib/useLive";
+import { SERVICE_MINUTES, VOLUNTEER_PROGRAMS, isVolunteerTask, volunteerDepartment } from "@/lib/volunteer";
 
 /** Bottom sheet for a map pin: what it is, who has it, its history, and what you can do about it. */
 export default function ReportSheet({ report, onClose }: { report: Report; onClose: () => void }) {
@@ -31,6 +42,17 @@ export default function ReportSheet({ report, onClose }: { report: Report; onClo
   const carrying = mine || (myClaim && mission?.mission_type === "delivery");
   const showFinderCard = report.kind === "found" && carrying && report.item?.whereabouts === "with_finder";
   const { data: code } = useLive(() => (showFinderCard ? getCheckinCode(report.id) : Promise.resolve(null)), null, [report.id, showFinderCard]);
+
+  const volunteerTask = !!mission && isVolunteerTask(report.fix_path, mission.mission_type);
+  const dept = volunteerTask ? volunteerDepartment(report) : null;
+  const checkSignup = !!dept && mission?.status === "open" && !mine;
+  const {
+    data: volunteering,
+    error: volunteerError,
+    reload: reloadVolunteering,
+  } = useLive(() => (checkSignup ? getVolunteering(user.id) : Promise.resolve([])), null, [user.id, checkSignup]);
+  const needsSignup = checkSignup && !!volunteering && !volunteering.some((v) => v.authority_id === dept);
+  const serviceMinutes = volunteerTask && mission ? SERVICE_MINUTES[mission.mission_type] : undefined;
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -80,6 +102,12 @@ export default function ReportSheet({ report, onClose }: { report: Report; onClo
           {report.kind === "issue" && report.routed_to && <span>Sent to {authorityName(report.routed_to)}</span>}
           {report.kind === "issue" && <span>{report.votes} × me too</span>}
         </div>
+        {report.kind === "issue" && (
+          <div className="mt-2 text-xs">
+            <SolvabilityBadge fixPath={report.fix_path} />
+            {report.solvable_reason && <p className="mt-1 text-slate-300">{report.solvable_reason}</p>}
+          </div>
+        )}
         {report.kind === "issue" && <Freshness report={report} className="mt-1" />}
         {report.kind === "issue" && !["resolved", "verified", "closed"].includes(report.status) && (
           <div className="mt-2">
@@ -114,7 +142,30 @@ export default function ReportSheet({ report, onClose }: { report: Report; onClo
               <span className="shrink-0 rounded-full bg-cyan-400/20 px-2 py-0.5 font-mono">+{mission.points} pts</span>
             </div>
             <div className="mt-1 text-slate-300">Proof: {mission.proof_required}</div>
-            {mission.status === "open" && !mine && (
+            {dept && (
+              <div className="mt-1 text-emerald-200">
+                {serviceMinutes ? `+${serviceMinutes} min community service · ` : ""}
+                {VOLUNTEER_PROGRAMS[dept].program} volunteers
+              </div>
+            )}
+            {checkSignup && volunteerError && <p className="mt-2 text-rose-300">{volunteerError}</p>}
+            {needsSignup && dept && (
+              <VolunteerSignup
+                department={dept}
+                busy={busy}
+                onRegister={() =>
+                  run(async () => {
+                    await registerVolunteer(dept);
+                    reloadVolunteering();
+                    await claimMission(mission.id);
+                  })
+                }
+              />
+            )}
+            {mission.status === "open" &&
+              !mine &&
+              !volunteerError &&
+              (!checkSignup || (volunteering && !needsSignup)) && (
               <button
                 disabled={busy}
                 onClick={() => run(() => claimMission(mission.id))}
@@ -122,6 +173,9 @@ export default function ReportSheet({ report, onClose }: { report: Report; onClo
               >
                 {busy ? "Claiming…" : "Claim mission · 30 min"}
               </button>
+            )}
+            {checkSignup && !volunteering && !volunteerError && (
+              <p className="mt-2 text-slate-400">Checking volunteer registration…</p>
             )}
             {mission.status === "open" && mine && <p className="mt-2 text-slate-400">Other students can claim this one.</p>}
             {myClaim && mission.claim_expires_at && (

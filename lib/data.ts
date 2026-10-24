@@ -60,4 +60,6 @@ export const {
   getPendingProofs,
   overrideFixPath,
   getReportsForAuthority,
+  getVolunteering,
+  registerVolunteer,
 } = api;

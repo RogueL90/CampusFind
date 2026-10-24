@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Campus Quests · SJSU",
-    short_name: "Campus Quests",
+    name: "CampusFind · SJSU",
+    short_name: "CampusFind",
     description: "3D HUD campus map with lost & found missions and accessibility alerts.",
     start_url: "/",
     display: "standalone",

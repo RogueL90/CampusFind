@@ -9,6 +9,7 @@ import type { MatchScore } from "@/app/api/match/route";
 import FinderCard from "@/components/FinderCard";
 import PageShell from "@/components/PageShell";
 import PinPicker, { type PinValue } from "@/components/map/PinPicker";
+import { SolvabilityNote } from "@/components/Solvability";
 import { AUTHORITIES, AUTHORITY_IDS, authorityName, ISSUE_CATEGORIES, ISSUE_CATEGORY_IDS, mapCategory } from "@/lib/categories";
 import { createMatch, createReport, getCheckinCode, getOpenLostReports, uploadPhoto } from "@/lib/data";
 import { fixPath } from "@/lib/fixPath";
@@ -17,6 +18,7 @@ import { MATCH_THRESHOLD } from "@/lib/matchScore";
 import { reportFooter } from "@/lib/reportFooter";
 import { resizeImage } from "@/lib/resizeImage";
 import { HAZARD_FLAGS, type NewReport, type Report, type ReportKind, type Triage } from "@/lib/types";
+import { PRIVATE_LISTING } from "@/lib/visibility";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 
 type Step = "photo" | "pin" | "confirm" | "done";
@@ -24,6 +26,11 @@ type Saved = { report: Report; matched: number; code: string | null };
 type PhotoSource = "camera" | "gallery" | null;
 
 const KIND_LABEL: Record<ReportKind, string> = { issue: "Campus problem", lost: "Lost item", found: "Found item" };
+
+/** Drop a leading "Lost" or "Found" so the question isn't answered before the student picks. */
+function itemName(title: string) {
+  return title.replace(/^(lost|found)\b[:\s]*/i, "");
+}
 
 const ACCESS = ["wheelchair", "low_vision", "no_stairs", "crutches"];
 
@@ -117,6 +124,9 @@ function ReportFlow() {
   const [building, setBuilding] = useState("");
   const [when, setWhen] = useState("unsure");
   const [delivery, setDelivery] = useState(false);
+  const [listOnMap, setListOnMap] = useState(true);
+  /** Set only after the student says whether they lost the item or someone else did. */
+  const [itemRole, setItemRole] = useState<"lost" | "found" | null>(null);
   const [triage, setTriage] = useState<Triage | null>(null);
   const [triaging, setTriaging] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -129,7 +139,9 @@ function ReportFlow() {
   const source = useRef<PhotoSource>(null);
   const triagePromise = useRef<Promise<Triage | null> | null>(null);
 
-  const kind = triage?.kind ?? null;
+  const detectedItem = !!triage && triage.kind !== "issue";
+  // An item is not lost or found until the student says so. The AI only decides that it is an item.
+  const kind: ReportKind | null = !triage ? null : triage.kind === "issue" ? "issue" : itemRole;
   const isItem = kind === "lost" || kind === "found";
 
   function reset() {
@@ -141,6 +153,8 @@ function ReportFlow() {
     setBuilding("");
     setWhen("unsure");
     setDelivery(false);
+    setListOnMap(true);
+    setItemRole(null);
     setTriage(null);
     setShowDetails(false);
     setSaved(null);
@@ -157,6 +171,8 @@ function ReportFlow() {
     triagePromise.current = requestTriage(dataUrl.current, note, source.current, forced)
       .then((t) => {
         setTriage(t);
+        if (forced === "lost" || forced === "found") setItemRole(forced);
+        else setItemRole(null);
         return t;
       })
       .catch((e: Error) => {
@@ -202,9 +218,21 @@ function ReportFlow() {
     setBuilding(nearestBuilding(p.lat, p.lng) ?? "");
   }
 
+  function chooseItemRole(role: "lost" | "found") {
+    setItemRole(role);
+    const label = role === "lost" ? "Lost" : "Found";
+    setTriage((t) => {
+      if (!t) return t;
+      const rest = t.title.replace(/^(lost|found)\s*:\s*/i, "");
+      const title = `${label}: ${rest}`;
+      return { ...t, kind: role, title, report_subject: t.report_subject ? title : t.report_subject };
+    });
+  }
+
   async function pinNext() {
+    const t = (await triagePromise.current) ?? triage;
+    if (t && t.kind !== "issue" && itemRole == null) return;
     setStep("confirm");
-    await triagePromise.current;
   }
 
   async function submit() {
@@ -226,11 +254,12 @@ function ReportFlow() {
       lat: pin.lat,
       lng: pin.lng,
       building: building.trim() || undefined,
-      fix_path: fixPath({ kind, category: t.category, severity: t.severity, hazard_flags: t.hazard_flags }),
+      fix_path: fixPath({ ...t, kind }),
+      solvable_reason: isItem ? undefined : t.solvable_reason || undefined,
       hazard_flags: isItem ? [] : t.hazard_flags,
       access_impact: isItem ? [] : t.access_impact,
       routed_to: isItem ? "lost_found" : (t.routed_to ?? undefined),
-      cc: isItem ? [] : t.cc,
+      cc: isItem ? (listOnMap ? [] : [PRIVATE_LISTING]) : t.cc,
       identified: t.identified || undefined,
       routing_reason: t.routing_reason || undefined,
       report_subject: t.report_subject,
@@ -245,6 +274,7 @@ function ReportFlow() {
         lost_from: lostFrom ?? undefined,
         lost_to: lostTo ?? undefined,
         leave_for_delivery: kind === "found" && delivery,
+        public_map: listOnMap,
       }),
     };
     try {
@@ -266,6 +296,17 @@ function ReportFlow() {
     setTriage((t) => (t ? { ...t, [k]: t[k].includes(v) ? t[k].filter((x) => x !== v) : [...t[k], v] } : t));
 
   const stepIndex = ["photo", "pin", "confirm"].indexOf(step);
+  const pinStatus = triaging
+    ? "✨ AI is looking at it…"
+    : triage
+      ? triage.kind === "issue"
+        ? `✨ Campus problem: ${triage.title}`
+        : itemRole
+          ? `✨ ${KIND_LABEL[itemRole]}: ${triage.title}`
+          : `✨ Item: ${itemName(triage.title)}`
+      : uploading
+        ? "Uploading…"
+        : "";
 
   return (
     <div className="space-y-5">
@@ -340,9 +381,7 @@ function ReportFlow() {
               // eslint-disable-next-line @next/next/no-img-element -- local object URL
               <img src={preview} alt="Your photo" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
             )}
-            <p className="text-sm text-slate-400">
-              {triaging ? "✨ AI is looking at it…" : triage ? `✨ ${KIND_LABEL[triage.kind]}: ${triage.title}` : uploading ? "Uploading…" : ""}
-            </p>
+            <p className="text-sm text-slate-400">{pinStatus}</p>
           </div>
           <h2 className="text-2xl font-semibold text-white">
             {kind === "lost" ? "Where did you lose it?" : kind === "found" ? "Where did you find it?" : "Where is it?"}
@@ -353,6 +392,29 @@ function ReportFlow() {
               Building <span className="text-slate-600">(optional)</span>
               <input value={building} onChange={(e) => setBuilding(e.target.value)} placeholder="Outdoors" className={field} />
             </label>
+          )}
+          {detectedItem && (
+            <div>
+              <p className="text-sm text-slate-200">Did you lose this, or did someone else?</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {(
+                  [
+                    ["lost", "I lost it"],
+                    ["found", "Someone else lost it"],
+                  ] as const
+                ).map(([role, label]) => (
+                  <button
+                    key={role}
+                    type="button"
+                    aria-pressed={itemRole === role}
+                    onClick={() => chooseItemRole(role)}
+                    className={`rounded-xl border px-3 py-3 text-sm ${itemRole === role ? "border-cyan-300 bg-cyan-300/15 font-semibold text-cyan-100" : "border-white/15 bg-white/5 text-white"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           {kind === "lost" && (
             <div>
@@ -386,7 +448,12 @@ function ReportFlow() {
             </label>
           )}
           {error && <p className="text-sm text-rose-300">{error}</p>}
-          <button type="button" disabled={!pin} onClick={pinNext} className="w-full rounded-xl bg-white py-3 font-medium text-slate-900 disabled:opacity-30">
+          <button
+            type="button"
+            disabled={!pin || triaging || !triage || (detectedItem && !itemRole)}
+            onClick={pinNext}
+            className="w-full rounded-xl bg-white py-3 font-medium text-slate-900 disabled:opacity-30"
+          >
             Next
           </button>
         </section>
@@ -416,7 +483,7 @@ function ReportFlow() {
                 )}
                 <div className="min-w-0">
                   <span className="rounded-full bg-cyan-300/15 px-2 py-0.5 text-xs text-cyan-200">
-                    ✨ {KIND_LABEL[triage.kind]} · {triage.source === "claude" ? "Claude" : "Demo AI"}
+                    ✨ {kind ? KIND_LABEL[kind] : "Item"} · {triage.source === "claude" ? "Claude" : "Demo AI"}
                   </span>
                   <input
                     aria-label="Title"
@@ -536,28 +603,78 @@ function ReportFlow() {
                 </div>
               )}
 
-              {!isItem && fixPath(triage) === "self_fixable" && (
-                <p className="rounded-xl bg-white/5 px-3 py-2 text-sm text-slate-200">🎯 Students can help: this also becomes a mission</p>
+              {isItem && (
+                <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={listOnMap}
+                    onChange={(e) => setListOnMap(e.target.checked)}
+                    className="mt-0.5 h-5 w-5 accent-cyan-400"
+                  />
+                  <span>
+                    <span className="block">Show on everyone&apos;s map</span>
+                    <span className="block text-xs text-slate-400">
+                      On by default. Turn this off to stay anonymous. Only you and Lost &amp; Found staff will see it.
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              {!isItem && <SolvabilityNote triage={triage} />}
+
+              {detectedItem && (
+                <div>
+                  <p className="text-sm text-slate-200">Did you lose this, or did someone else?</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        ["lost", "I lost it"],
+                        ["found", "Someone else lost it"],
+                      ] as const
+                    ).map(([role, label]) => (
+                      <button
+                        key={role}
+                        type="button"
+                        aria-pressed={itemRole === role}
+                        onClick={() => chooseItemRole(role)}
+                        className={`rounded-xl border px-3 py-3 text-sm ${itemRole === role ? "border-cyan-300 bg-cyan-300/15 font-semibold text-cyan-100" : "border-white/15 bg-white/5 text-white"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
 
               <p className="text-center text-xs text-slate-500">
-                Not a {KIND_LABEL[triage.kind].toLowerCase()}? It&apos;s a{" "}
-                {(["issue", "lost", "found"] as const)
-                  .filter((k) => k !== triage.kind)
-                  .map((k, i) => (
-                    <span key={k}>
-                      {i > 0 && " or "}
-                      <button type="button" onClick={() => runTriage(k)} className="text-cyan-300 underline-offset-2 hover:underline">
-                        {KIND_LABEL[k].toLowerCase()}
-                      </button>
-                    </span>
-                  ))}
+                {detectedItem ? (
+                  <>
+                    Not an item? It&apos;s a{" "}
+                    <button type="button" onClick={() => runTriage("issue")} className="text-cyan-300 underline-offset-2 hover:underline">
+                      campus problem
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Not a campus problem? It&apos;s an{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemRole(null);
+                        setTriage((t) => (t ? { ...t, kind: "found" } : t));
+                      }}
+                      className="text-cyan-300 underline-offset-2 hover:underline"
+                    >
+                      item
+                    </button>
+                  </>
+                )}
               </p>
 
               {error && <p className="text-sm text-rose-300">{error}</p>}
               <button
                 type="button"
-                disabled={saving || !pin || !triage.title.trim()}
+                disabled={saving || !pin || !triage.title.trim() || (detectedItem && !itemRole)}
                 onClick={submit}
                 className="w-full rounded-xl bg-cyan-400 py-3.5 text-lg font-semibold text-slate-950 disabled:opacity-40"
               >
@@ -574,16 +691,22 @@ function ReportFlow() {
             <div className="text-5xl">✅</div>
             <h2 className="mt-2 text-2xl font-semibold text-white">Reported in {elapsed}s</h2>
             <p className="mt-1 text-sm text-slate-300">
-              {kind === "lost" && "Only you and Lost & Found staff can see it. We'll ping you the moment a found item looks like a match."}
+              {kind === "lost" &&
+                (listOnMap
+                  ? "It's on everyone's map. We'll ping you the moment a found item looks like a match."
+                  : "Only you and Lost & Found staff can see it. We'll ping you the moment a found item looks like a match.")}
               {kind === "found" &&
                 (saved.matched
                   ? "Good news: it looks like someone lost this. We've let them know."
                   : "Thanks! We'll match it as soon as the owner reports it.")}
               {kind === "found" &&
                 (delivery ? " Another student can claim the delivery mission and carry it in." : " Please take it to the Lost & Found office.")}
+              {kind === "found" && !listOnMap && " It stays off the public map."}
               {kind === "issue" &&
                 `Sent to ${authorityName(saved.report.routed_to)}${saved.report.cc.length ? `, cc ${saved.report.cc.map(authorityName).join(", ")}` : ""}.${
-                  saved.report.fix_path === "self_fixable" ? " It's also a mission other students can help with." : ""
+                  saved.report.fix_path === "self_fixable"
+                    ? " It's student solvable, so registered volunteers can claim it for points and service hours."
+                    : ""
                 }`}
             </p>
           </div>

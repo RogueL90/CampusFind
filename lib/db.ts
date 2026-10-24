@@ -19,6 +19,7 @@ import type {
   Report,
   Reward,
   StatusEvent,
+  VolunteerRecord,
 } from "./types";
 import type { LineString } from "geojson";
 
@@ -89,6 +90,7 @@ function toReport(row: ReportRow): Report {
           claim_expires_at,
         }
       : null,
+    public_map: report.public_map !== false,
     item:
       report.kind === "issue"
         ? null
@@ -156,7 +158,13 @@ export async function createReport(input: NewReport): Promise<Report> {
   const row = unwrap(
     await supabase().rpc("create_report", { p_reporter: getCurrentUserId(), p: input }).single(),
   ) as ReportRow;
-  return toReport(row);
+  const report = toReport(row);
+  // Older create_report functions ignore public_map. Set it on the row when the column exists.
+  if ((input.kind === "lost" || input.kind === "found") && input.public_map === false && report.public_map !== false) {
+    const { error } = await supabase().from("reports").update({ public_map: false }).eq("id", report.id);
+    if (!error) return { ...report, public_map: false };
+  }
+  return report;
 }
 
 export async function voteMeToo(reportId: string): Promise<void> {
@@ -387,6 +395,28 @@ export async function overrideFixPath(reportId: string, to: Report["fix_path"], 
       p_reason: reason ?? null,
     }),
   );
+}
+
+const VOLUNTEER_MIGRATION = "supabase/migrations/student_solvable.sql";
+
+/** Volunteer sign-up needs tables from the student-solvable migration; say so instead of a raw Postgres error. */
+function unwrapVolunteer<T>(res: { data: T | null; error: { message: string; code?: string } | null }): T {
+  if (res.error && /volunteer|does not exist|could not find/i.test(res.error.message) && /42P01|42883|PGRST20[25]/.test(res.error.code ?? "")) {
+    throw new Error(`Volunteer sign-up isn't set up in the database yet. Run ${VOLUNTEER_MIGRATION} in the Supabase SQL editor.`);
+  }
+  return unwrap(res);
+}
+
+/** The departments this student volunteers with, and the student-solvable work each one credited. */
+export async function getVolunteering(userId: string): Promise<VolunteerRecord[]> {
+  return unwrapVolunteer(
+    await supabase().from("volunteer_summary").select("*").eq("user_id", userId).order("registered_at"),
+  ) as VolunteerRecord[];
+}
+
+/** Joins a department's volunteer program. The student has agreed to its safety rules. */
+export async function registerVolunteer(authorityId: string): Promise<void> {
+  unwrapVolunteer(await supabase().rpc("register_volunteer", { p_user: getCurrentUserId(), p_authority: authorityId }));
 }
 
 /** Staff view: reports routed or cc'd to one campus authority. */

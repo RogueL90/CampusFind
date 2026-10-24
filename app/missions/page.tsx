@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useState } from "react";
 import Countdown from "@/components/Countdown";
 import PageShell, { Empty, ErrorNote } from "@/components/PageShell";
-import { getBalance, getLedger, getMyMissions, getReports, subscribeBalance, subscribeReports } from "@/lib/data";
+import { authorityName } from "@/lib/categories";
+import { getBalance, getLedger, getMyMissions, getReports, getVolunteering, subscribeBalance, subscribeReports } from "@/lib/data";
 import { timeAgo } from "@/lib/status";
 import type { Mission } from "@/lib/types";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useLive } from "@/lib/useLive";
+import { VOLUNTEER_PROGRAMS, formatServiceTime, isVolunteerDepartment } from "@/lib/volunteer";
 
 const FILTERS = ["all", "active", "available", "completed"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -36,6 +38,12 @@ export default function MissionsPage() {
 
   const { data: balance } = useLive(() => getBalance(user.id), (cb) => subscribeBalance(user.id, cb), [user.id]);
   const { data: ledger } = useLive(() => getLedger(user.id), (cb) => subscribeBalance(user.id, cb), [user.id]);
+  const { data: volunteering, error: volunteerError } = useLive(
+    () => getVolunteering(user.id),
+    (cb) => subscribeBalance(user.id, cb),
+    [user.id],
+  );
+  const serviceTotal = volunteering?.reduce((s, v) => s + v.service_minutes, 0) ?? 0;
   const { data, error } = useLive(
     async () => {
       const [mine, reports] = await Promise.all([getMyMissions(user.id), getReports()]);
@@ -117,6 +125,41 @@ export default function MissionsPage() {
           </li>
         ))}
       </ul>
+
+      <section className="mt-6">
+        <div className="mb-2 flex items-baseline justify-between">
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-emerald-300">Community service</h2>
+          {serviceTotal > 0 && <span className="font-mono text-xs text-emerald-200">{formatServiceTime(serviceTotal)} total</span>}
+        </div>
+        {volunteerError && <ErrorNote>{volunteerError}</ErrorNote>}
+        {volunteering?.length === 0 && (
+          <Empty>
+            Not volunteering yet. Claim a 🧹 Student solvable task on the map and you&apos;ll be asked to register with the department that runs it.
+          </Empty>
+        )}
+        {volunteering && volunteering.length > 0 && (
+          <ul className="divide-y divide-white/5 rounded-2xl border border-emerald-400/20">
+            {volunteering.map((v) => (
+              <li key={v.authority_id} className="flex items-center gap-3 px-3 py-2.5 text-xs">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-white">
+                    {isVolunteerDepartment(v.authority_id) ? VOLUNTEER_PROGRAMS[v.authority_id].program : authorityName(v.authority_id)}
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    {authorityName(v.authority_id)} · joined {timeAgo(v.registered_at)}
+                  </span>
+                </span>
+                <span className="text-right">
+                  <span className="block font-mono text-emerald-200">{formatServiceTime(v.service_minutes)}</span>
+                  <span className="text-[11px] text-slate-400">
+                    {v.tasks_completed} task{v.tasks_completed === 1 ? "" : "s"}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {ledger && ledger.length > 0 && (
         <section className="mt-6">

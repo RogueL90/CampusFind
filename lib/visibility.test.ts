@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_USERS, LEO, MAYA } from "./currentUser";
 import type { Mission, Report } from "./types";
-import { forViewer } from "./visibility";
+import { forViewer, PRIVATE_LISTING } from "./visibility";
 
 const [maya, leo, office, moderator] = DEMO_USERS;
 
@@ -60,12 +60,17 @@ describe("forViewer", () => {
     expect(forViewer(issue, leo)).toBe(issue);
   });
 
-  it("hides other students' lost items, including the area", () => {
-    expect(forViewer(report({}), leo)).toBeNull();
+  it("shows other students a lost item that is listed on the map", () => {
+    expect(forViewer(report({}), leo)?.title).toBe("Black AirPods case");
   });
 
-  it("hides other students' found items", () => {
-    expect(forViewer(report({ kind: "found", reporter_id: LEO, status: "with_finder" }), maya)).toBeNull();
+  it("hides an anonymous lost item from other students", () => {
+    expect(forViewer(report({ public_map: false }), leo)).toBeNull();
+    expect(forViewer(report({ cc: [PRIVATE_LISTING] }), leo)).toBeNull();
+  });
+
+  it("hides an anonymous found item from other students", () => {
+    expect(forViewer(report({ kind: "found", reporter_id: LEO, status: "with_finder", public_map: false }), maya)).toBeNull();
   });
 
   it("shows owners their own reports in full", () => {
@@ -80,7 +85,7 @@ describe("forViewer", () => {
   });
 
   it("shows an open delivery mission as a generic task with no identifying details", () => {
-    const found = report({ id: "r-2", kind: "found", reporter_id: LEO, status: "with_finder", mission: delivery() });
+    const found = report({ id: "r-2", kind: "found", reporter_id: LEO, status: "with_finder", public_map: false, mission: delivery() });
     const seen = forViewer(found, maya);
     expect(seen?.title).toBe("Found item to deliver");
     expect(seen?.mission?.title).toBe("Carry a found item to Lost & Found");
@@ -90,7 +95,7 @@ describe("forViewer", () => {
   });
 
   it("shows a claimed delivery in full to its carrier only", () => {
-    const found = report({ id: "r-2", kind: "found", reporter_id: LEO, mission: delivery({ status: "claimed", claimed_by: MAYA }) });
+    const found = report({ id: "r-2", kind: "found", reporter_id: LEO, public_map: false, mission: delivery({ status: "claimed", claimed_by: MAYA }) });
     expect(forViewer(found, maya)).toBe(found);
     expect(forViewer({ ...found, reporter_id: "someone-else" }, leo)).toBeNull();
   });

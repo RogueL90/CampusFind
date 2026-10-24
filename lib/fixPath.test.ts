@@ -29,4 +29,22 @@ describe("fixPath", () => {
   it("treats a missing severity as not low", () => {
     expect(fixPath({ kind: "issue", category: "garbage" })).toBe("staff");
   });
+
+  it("follows Claude when it says a student can't do it", () => {
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 1, student_solvable: false })).toBe("staff");
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 1, student_solvable: true })).toBe("self_fixable");
+  });
+
+  it("never lets Claude make dangerous work a student task", () => {
+    expect(fixPath({ kind: "issue", category: "construction", severity: 1, student_solvable: true })).toBe("staff");
+    expect(fixPath({ kind: "issue", category: "open_manhole", severity: 1, student_solvable: true })).toBe("staff");
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 1, hazard_flags: ["biohazard"], student_solvable: true })).toBe("staff");
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 4, student_solvable: true })).toBe("staff");
+  });
+
+  it("needs a department that runs a volunteer program", () => {
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 1, routed_to: "fdo_custodial" })).toBe("self_fixable");
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 1, routed_to: "upd" })).toBe("staff");
+    expect(fixPath({ kind: "issue", category: "garbage", severity: 1, routed_to: "ehs" })).toBe("staff");
+  });
 });

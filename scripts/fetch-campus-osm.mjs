@@ -24,14 +24,14 @@ out body geom;`;
 const round = (n) => Math.round(n * 1e6) / 1e6;
 
 // Raw Overpass reply, reused on re-runs so tweaking the processing doesn't hit the public server.
-const CACHE = path.join(os.tmpdir(), "campus-quests-osm.json");
+const CACHE = path.join(os.tmpdir(), "campusfind-osm.json");
 
 async function download() {
   if (existsSync(CACHE) && !process.argv.includes("--refresh")) return JSON.parse(readFileSync(CACHE, "utf8"));
   for (let attempt = 0, wait = 5; ; attempt++, wait *= 2) {
     const res = await fetch(OVERPASS, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "campus-quests-hackathon/1.0" },
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "CampusFind/1.0" },
       body: new URLSearchParams({ data: query }),
     });
     if (res.ok) {

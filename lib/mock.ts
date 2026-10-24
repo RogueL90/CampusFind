@@ -22,7 +22,10 @@ import type {
   Report,
   Reward,
   StatusEvent,
+  VolunteerRecord,
 } from "@/lib/types";
+import { authorityName } from "@/lib/categories";
+import { SERVICE_MINUTES, VOLUNTEER_PROGRAMS, formatServiceTime, isVolunteerDepartment, isVolunteerTask } from "@/lib/volunteer";
 
 const JORDAN = "a0000000-0000-4000-8000-000000000005";
 const AVA = "a0000000-0000-4000-8000-000000000006";
@@ -64,6 +67,7 @@ const ledger: LedgerEntry[] = [];
 const redemptions: (Redemption & { user_id: string })[] = [];
 const notifications: Notification[] = [];
 const statusEvents: StatusEvent[] = [];
+const volunteers: { user_id: string; authority_id: string; registered_at: string }[] = [];
 let eventSeq = 1;
 
 const rewards: Reward[] = [
@@ -228,6 +232,7 @@ function seed(s: Seed) {
     report_subject: null,
     report_body: null,
     contains_sensitive: false,
+    public_map: true,
     status: "routed",
     created_at: minutesAgo(minutes),
     ...rest,
@@ -271,6 +276,7 @@ seed({
   building: "Clark Hall",
   hazard_flags: ["construction"],
   access_impact: ["wheelchair", "crutches", "low_vision", "no_stairs"],
+  solvable_reason: "An active construction site is for trained crews only.",
   votes: 6,
   minutes: 60 * 26,
 });
@@ -352,6 +358,7 @@ seed({
   floor: "4",
   routed_to: "it_services",
   fix_path: "self_fixable",
+  solvable_reason: "A volunteer can check it with a speed test at the spot.",
   status: "mission_open",
   votes: 11,
   mission: ["verify", "Is the Wi-Fi still slow on MLK floor 4?", 5, "Speed test at the pin"],
@@ -366,6 +373,7 @@ seed({
   building: "Student Union",
   floor: "2",
   fix_path: "self_fixable",
+  solvable_reason: "A volunteer can check whether it works and photograph it.",
   status: "mission_open",
   votes: 5,
   mission: ["verify", "Verify: Bottle filler red light, Student Union 2nd floor", 5, "Geotagged photo at the pin"],
@@ -378,6 +386,7 @@ seed({
   title: "Overflowing trash bins by Tower Lawn",
   at: [-121.8833, 37.33515],
   routed_to: "fdo_custodial",
+  solvable_reason: "The bins themselves need emptying with custodial equipment. Trash spilled around them would be a student task.",
   votes: 3,
 });
 seed({
@@ -389,6 +398,7 @@ seed({
   at: [-121.88035, 37.33545],
   routed_to: "fdo_custodial",
   fix_path: "self_fixable",
+  solvable_reason: "Loose cups and wrappers, nothing sharp: a volunteer with gloves and a bag can clear it.",
   status: "mission_open",
   mission: ["tidy", "Quick tidy: litter outside the Event Center", 10, "Before and after photos"],
 });
@@ -402,6 +412,7 @@ seed({
   at: [-121.87845, 37.33395],
   routed_to: "ehs",
   hazard_flags: ["pests"],
+  solvable_reason: "Rats can carry disease, so pest control handles this.",
   votes: 7,
 });
 seed({
@@ -414,6 +425,7 @@ seed({
   building: "Central Classroom Building",
   routed_to: "fdo_custodial",
   fix_path: "self_fixable",
+  solvable_reason: "A few chairs to put back: quick and safe for a volunteer.",
   status: "mission_open",
   mission: ["tidy", "Quick tidy: return the chairs in CCB study room 101", 10, "Before and after photos"],
 });
@@ -545,9 +557,26 @@ checks.push(
 ledger.push(
   { id: "l-1", user_id: LEO, delta: 50, reason: "return_checkin", mission_id: null, report_id: null, state: "spendable", created_at: minutesAgo(60 * 24 * 6) },
   { id: "l-2", user_id: LEO, delta: 10, reason: "mission:access_check", mission_id: null, report_id: null, state: "spendable", created_at: minutesAgo(60 * 24 * 4) },
-  { id: "l-3", user_id: MAYA, delta: 10, reason: "mission:tidy", mission_id: null, report_id: null, state: "spendable", created_at: minutesAgo(60 * 24 * 5) },
+  { id: "l-3", user_id: MAYA, delta: 10, reason: "mission:tidy", mission_id: "m-maya-chairs", report_id: "r-ccb-chairs", state: "spendable", created_at: minutesAgo(60 * 24 * 5) },
   { id: "l-4", user_id: MAYA, delta: 5, reason: "mission:verify", mission_id: null, report_id: null, state: "spendable", created_at: minutesAgo(60 * 24 * 3) },
 );
+
+// Maya volunteers with the Campus Cleanup Crew and has one approved cleanup. Leo hasn't registered
+// anywhere yet, so claiming a cleanup as Leo shows the sign-up.
+volunteers.push({ user_id: MAYA, authority_id: "fdo_custodial", registered_at: minutesAgo(60 * 24 * 6) });
+missions.push({
+  id: "m-maya-chairs",
+  report_id: "r-ccb-chairs",
+  mission_type: "tidy",
+  title: "Quick tidy: return the chairs in CCB study room 101",
+  points: 10,
+  proof_required: "Before and after photos",
+  status: "completed",
+  claimed_by: MAYA,
+  claimed_at: minutesAgo(60 * 24 * 5 + 20),
+  claim_expires_at: minutesAgo(60 * 24 * 5 - 10),
+  completed_at: minutesAgo(60 * 24 * 5),
+});
 
 notifications.push(
   { id: "n-1", user_id: MAYA, text: "Your black AirPods case report is with Lost & Found. Only you and staff can see it.", link: "/?report=r-lost-airpods", read: false, created_at: minutesAgo(120) },
@@ -646,6 +675,8 @@ export async function createReport(input: NewReport): Promise<Report> {
     report_subject: input.report_subject ?? null,
     report_body: input.report_body ?? null,
     contains_sensitive: input.contains_sensitive ?? false,
+    solvable_reason: input.solvable_reason ?? null,
+    public_map: input.kind === "issue" || input.public_map !== false,
     status: "submitted",
     created_at: nowIso(),
   };
@@ -733,7 +764,14 @@ export async function claimMission(missionId: string): Promise<Mission> {
   const m = missionRow(missionId);
   if (lapsed(m)) Object.assign(m, { status: "open", claimed_by: null, claim_expires_at: null });
   if (m.status !== "open") throw new Error("Someone else is already on this mission");
-  if (reportRow(m.report_id).reporter_id === user) throw new Error("You cannot claim a mission on your own report");
+  const r = reportRow(m.report_id);
+  if (r.reporter_id === user) throw new Error("You cannot claim a mission on your own report");
+  if (isVolunteerTask(r.fix_path, m.mission_type)) {
+    const dept = r.routed_to ?? "fdo_maintenance";
+    if (!volunteers.some((v) => v.user_id === user && v.authority_id === dept)) {
+      throw new Error(`Register to volunteer with ${authorityName(dept)} before claiming this task`);
+    }
+  }
   if (missions.some((x) => x.id !== m.id && x.claimed_by === user && x.status === "claimed" && !lapsed(x))) {
     throw new Error("You already have an active mission. Finish it or let it expire first");
   }
@@ -788,7 +826,14 @@ export async function reviewProof(proofId: string, approve: boolean): Promise<vo
   if (approve) {
     Object.assign(m, { status: "completed", completed_at: nowIso() });
     setStatus(r.id, m.mission_type === "tidy" ? "resolved" : "verified", getCurrentUserId());
-    notify(p.helper_id, `+${m.points} points approved: ${m.title}`, "/missions");
+    const service = isVolunteerTask(r.fix_path, m.mission_type) ? (SERVICE_MINUTES[m.mission_type] ?? 0) : 0;
+    notify(
+      p.helper_id,
+      service
+        ? `+${m.points} points and ${formatServiceTime(service)} of community service approved: ${m.title}`
+        : `+${m.points} points approved: ${m.title}`,
+      "/missions",
+    );
     if (r.reporter_id && r.reporter_id !== p.helper_id) notify(r.reporter_id, `A student checked your report: ${r.title}`, `/?report=${r.id}`);
   } else {
     Object.assign(m, { status: "open", claimed_by: null, claimed_at: null, claim_expires_at: null });
@@ -1072,6 +1117,39 @@ export async function overrideFixPath(reportId: string, to: FixPath, _reason?: s
   else if (to === "staff") {
     for (const m of missions) if (m.report_id === reportId && ["open", "claimed"].includes(m.status)) m.status = "cancelled";
     setStatus(reportId, "routed", getCurrentUserId());
+  }
+  emit();
+}
+
+/** The departments this student volunteers with, and the student-solvable work each one credited. */
+export async function getVolunteering(userId: string): Promise<VolunteerRecord[]> {
+  return delay(
+    volunteers
+      .filter((v) => v.user_id === userId)
+      .map((v) => {
+        const done = missions.filter((m) => {
+          if (m.claimed_by !== userId || m.status !== "completed") return false;
+          const r = reportRow(m.report_id);
+          return (r.routed_to ?? "fdo_maintenance") === v.authority_id && isVolunteerTask(r.fix_path, m.mission_type);
+        });
+        return {
+          authority_id: v.authority_id,
+          registered_at: v.registered_at,
+          tasks_completed: done.length,
+          service_minutes: done.reduce((s, m) => s + (SERVICE_MINUTES[m.mission_type] ?? 0), 0),
+        };
+      })
+      .sort((a, b) => a.registered_at.localeCompare(b.registered_at)),
+  );
+}
+
+/** Joins a department's volunteer program. The student has agreed to its safety rules. */
+export async function registerVolunteer(authorityId: string): Promise<void> {
+  const user = getCurrentUserId();
+  if (!isVolunteerDepartment(authorityId)) throw new Error(`${authorityName(authorityId)} doesn't take student volunteers`);
+  if (!volunteers.some((v) => v.user_id === user && v.authority_id === authorityId)) {
+    volunteers.push({ user_id: user, authority_id: authorityId, registered_at: nowIso() });
+    notify(user, `You're registered with ${VOLUNTEER_PROGRAMS[authorityId].program} (${authorityName(authorityId)}). You can now claim its student-solvable tasks.`, "/missions");
   }
   emit();
 }

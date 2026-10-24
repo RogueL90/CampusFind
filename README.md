@@ -1,4 +1,4 @@
-# Campus Quests
+# CampusFind
 
 3D HUD campus map for SJSU: report beacons, 3D obstacles, accessibility alerts, lost & found missions and rewards. Plan and roles live one folder up in `MASTER.md` and `roles/`.
 

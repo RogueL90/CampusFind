@@ -3,11 +3,12 @@
 import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import PageShell, { Empty, ErrorNote } from "@/components/PageShell";
-import { getBalance, getRedemptions, getRewards, redeemReward, subscribeBalance } from "@/lib/data";
+import { getBalance, getRedemptions, getRewards, getVolunteering, redeemReward, subscribeBalance } from "@/lib/data";
 import { timeAgo } from "@/lib/status";
 import type { Reward } from "@/lib/types";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useLive } from "@/lib/useLive";
+import { formatServiceTime } from "@/lib/volunteer";
 
 export default function RewardsPage() {
   const user = useCurrentUser();
@@ -18,6 +19,12 @@ export default function RewardsPage() {
   const { data: rewards } = useLive(getRewards, null, []);
   const { data: balance } = useLive(() => getBalance(user.id), (cb) => subscribeBalance(user.id, cb), [user.id]);
   const { data: redemptions, reload } = useLive(() => getRedemptions(user.id), (cb) => subscribeBalance(user.id, cb), [user.id]);
+  const { data: volunteering } = useLive(
+    () => getVolunteering(user.id).catch(() => []),
+    (cb) => subscribeBalance(user.id, cb),
+    [user.id],
+  );
+  const serviceTotal = volunteering?.reduce((s, v) => s + v.service_minutes, 0) ?? 0;
   const nameOf = (id: string) => rewards?.find((r) => r.id === id)?.name ?? "Reward";
 
   async function redeem(r: Reward) {
@@ -42,6 +49,18 @@ export default function RewardsPage() {
           <div className="mt-1 text-3xl font-semibold text-white">{balance?.spendable ?? "–"} pts</div>
         </div>
         {!!balance?.pending && <div className="text-right text-xs text-amber-200">+{balance.pending} pending review</div>}
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-slate-300">
+        <p className="font-semibold text-white">Ways to earn</p>
+        <p className="mt-1">📦 Bring found items to Lost & Found, or help return them to their owners.</p>
+        <p className="mt-1">
+          🧹 Take on Student solvable tasks such as litter pickups and quick checks. Register with the department that runs
+          them, and each approved task also counts toward your community service hours.
+        </p>
+        {serviceTotal > 0 && (
+          <p className="mt-2 font-mono text-emerald-200">{formatServiceTime(serviceTotal)} of community service logged</p>
+        )}
       </div>
 
       {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
