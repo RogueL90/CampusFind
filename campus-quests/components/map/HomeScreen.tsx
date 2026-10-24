@@ -22,7 +22,7 @@ import AskBar, { type AskMode } from "@/components/hud/AskBar";
 import NavCard from "@/components/hud/NavCard";
 import ReportSheet from "@/components/ReportSheet";
 import NotificationBell from "@/components/NotificationBell";
-import { DEMO_USERS, setCurrentUserId } from "@/lib/currentUser";
+import { DEMO_USERS, isStaff, setCurrentUserId } from "@/lib/currentUser";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useLocation } from "./useLocation";
 import type { CameraTarget } from "./CampusMap";
@@ -390,7 +390,13 @@ export default function HomeScreen() {
           <CompassStrip heading={bearing} items={compassItems} onItemClick={setSelectedId} />
         </div>
         <div className="pointer-events-auto">
-          <FilterChips hidden={hidden} nearbyOnly={nearbyOnly} onToggle={toggleCategory} onToggleNearby={() => setNearbyOnly((v) => !v)} />
+          <FilterChips
+            hidden={hidden}
+            nearbyOnly={nearbyOnly}
+            showLostFound={isStaff(user.role)}
+            onToggle={toggleCategory}
+            onToggleNearby={() => setNearbyOnly((v) => !v)}
+          />
         </div>
         <div className="flex items-start justify-between gap-2">
           <div className="pointer-events-auto flex flex-col gap-2">

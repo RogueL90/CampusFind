@@ -40,6 +40,8 @@ export const {
   subscribeNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  deleteNotification,
+  deleteAllNotifications,
   getDemoPath,
   uploadPhoto,
   getOpenLostReports,

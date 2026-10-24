@@ -918,6 +918,17 @@ export async function markAllNotificationsRead(userId: string): Promise<void> {
   emit();
 }
 
+export async function deleteNotification(notificationId: string): Promise<void> {
+  const i = notifications.findIndex((n) => n.id === notificationId);
+  if (i >= 0) notifications.splice(i, 1);
+  emit();
+}
+
+export async function deleteAllNotifications(userId: string): Promise<void> {
+  for (let i = notifications.length - 1; i >= 0; i--) if (notifications[i].user_id === userId) notifications.splice(i, 1);
+  emit();
+}
+
 export async function getDemoPath(_name = "clark_walk"): Promise<LineString | null> {
   return delay(DEMO_GEOMETRY.walkPath);
 }

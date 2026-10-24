@@ -41,6 +41,28 @@ const CLICKABLE = ["cq-beacons", "cq-volumes", "cq-volumes-active", "cq-lost-fil
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
 
 const ROUTE_COLOR = "#22d3ee";
+const BUILDING_LAYER = "building-3d";
+
+const INTRO_MS = 2000;
+const INTRO_BEARING_OFFSET = 85;
+const INTRO_ZOOM_START = 16;
+const INTRO_ZOOM_FULL = 17;
+const INTRO_PITCH = 46;
+
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+const NO_TRANSITION = { duration: 0, delay: 0 };
+
+/** Height is baked per tile, so a per-frame expression snaps. A zoom stop is interpolated on the GPU as the camera moves. */
+const RISING_HEIGHT = ["interpolate", ["linear"], ["zoom"], INTRO_ZOOM_START, 0, INTRO_ZOOM_FULL, ["to-number", ["get", "render_height"], 0]];
+const RISING_BASE = ["interpolate", ["linear"], ["zoom"], INTRO_ZOOM_START, 0, INTRO_ZOOM_FULL, ["to-number", ["get", "render_min_height"], 0]];
+
+function setBuildingPaint(map: MapLibreMap, height: unknown, base: unknown) {
+  if (!map.getLayer(BUILDING_LAYER)) return;
+  map.setPaintProperty(BUILDING_LAYER, "fill-extrusion-height-transition", NO_TRANSITION);
+  map.setPaintProperty(BUILDING_LAYER, "fill-extrusion-base-transition", NO_TRANSITION);
+  map.setPaintProperty(BUILDING_LAYER, "fill-extrusion-height", height);
+  map.setPaintProperty(BUILDING_LAYER, "fill-extrusion-base", base);
+}
 
 const DASH_STEPS = [
   [0, 4, 3],
@@ -232,6 +254,9 @@ export default function CampusMap(props: CampusMapProps) {
   const markersRef = useRef(new Map<string, Marker>());
   const propsRef = useRef(props);
   const [ready, setReady] = useState(false);
+  const introRef = useRef(false);
+  const introFlatRef = useRef(false);
+  const endIntroRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     propsRef.current = props;
@@ -240,13 +265,16 @@ export default function CampusMap(props: CampusMapProps) {
   useEffect(() => {
     if (!containerRef.current) return;
     configureMapLibre();
+    const reduced = propsRef.current.reducedMotion;
+    const flatStart = propsRef.current.flat;
+    const playIntroShot = !reduced && !flatStart;
     const map = new MapLibreMap({
       container: containerRef.current,
       style: MAP_STYLE_URL,
       center: DEFAULT_CAMERA.center,
-      zoom: DEFAULT_CAMERA.zoom,
-      pitch: DEFAULT_CAMERA.pitch,
-      bearing: DEFAULT_CAMERA.bearing,
+      zoom: playIntroShot ? INTRO_ZOOM_START : DEFAULT_CAMERA.zoom,
+      pitch: flatStart ? 0 : playIntroShot ? INTRO_PITCH : DEFAULT_CAMERA.pitch,
+      bearing: playIntroShot ? DEFAULT_CAMERA.bearing + INTRO_BEARING_OFFSET : DEFAULT_CAMERA.bearing,
       maxPitch: 75,
       attributionControl: { compact: true },
     });
@@ -254,7 +282,41 @@ export default function CampusMap(props: CampusMapProps) {
     silenceMissingIcons(map);
     if (process.env.NODE_ENV !== "production") Object.assign(window, { __cqMap: map });
 
+    let alive = true;
+    const finishIntro = () => {
+      if (!introRef.current) return;
+      introRef.current = false;
+      setBuildingPaint(map, ["get", "render_height"], ["get", "render_min_height"]);
+    };
+    endIntroRef.current = finishIntro;
+
+    const playIntro = () => {
+      introRef.current = true;
+      introFlatRef.current = propsRef.current.flat;
+      map.easeTo({
+        center: DEFAULT_CAMERA.center,
+        zoom: DEFAULT_CAMERA.zoom,
+        bearing: DEFAULT_CAMERA.bearing,
+        pitch: propsRef.current.flat ? 0 : DEFAULT_CAMERA.pitch,
+        duration: INTRO_MS,
+        easing: easeInOutCubic,
+        essential: true,
+      });
+    };
+
+    const releaseIntroForGesture = (e: { originalEvent?: Event }) => {
+      if (!introRef.current || !e.originalEvent) return;
+      finishIntro();
+      map.stop(true);
+    };
+
+    map.on("style.load", () => {
+      if (!alive || !playIntroShot) return;
+      setBuildingPaint(map, RISING_HEIGHT, RISING_BASE);
+    });
+
     map.on("load", () => {
+      if (!alive) return;
       applyHudTheme(map);
       addHudLayers(map);
       for (const layer of CLICKABLE) {
@@ -265,10 +327,27 @@ export default function CampusMap(props: CampusMapProps) {
         map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
         map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
       }
+      if (playIntroShot) {
+        try {
+          playIntro();
+        } catch {
+          introRef.current = false;
+          setBuildingPaint(map, ["get", "render_height"], ["get", "render_min_height"]);
+        }
+      }
       setReady(true);
     });
+    map.on("moveend", () => {
+      if (alive) finishIntro();
+    });
     map.on("rotate", () => propsRef.current.onBearingChange(map.getBearing()));
-    map.on("dragstart", () => propsRef.current.onUserPan());
+    map.on("dragstart", (e) => {
+      releaseIntroForGesture(e);
+      propsRef.current.onUserPan();
+    });
+    map.on("zoomstart", releaseIntroForGesture);
+    map.on("rotatestart", releaseIntroForGesture);
+    map.on("pitchstart", releaseIntroForGesture);
 
     const el = document.createElement("div");
     el.className = "user-dot";
@@ -280,6 +359,9 @@ export default function CampusMap(props: CampusMapProps) {
     const markers = markersRef.current;
     // Next keeps hidden routes' state (Activity), so a remount would otherwise see ready=true before the new map loads.
     return () => {
+      alive = false;
+      introRef.current = false;
+      endIntroRef.current = () => {};
       setReady(false);
       markers.clear();
       map.remove();
@@ -337,6 +419,7 @@ export default function CampusMap(props: CampusMapProps) {
     userMarkerRef.current?.getElement().classList.toggle("has-heading", userHeading !== null);
     if (!map || !ready) return;
     if (follow) {
+      endIntroRef.current();
       const zoom = wasFollowing.current ? map.getZoom() : 17.8;
       map.jumpTo({ center: userPos, bearing: userHeading ?? map.getBearing(), zoom });
     }
@@ -347,6 +430,12 @@ export default function CampusMap(props: CampusMapProps) {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
+    if (introRef.current && flat === introFlatRef.current) {
+      if (flat) map.dragRotate.disable();
+      else map.dragRotate.enable();
+      return;
+    }
+    endIntroRef.current();
     map.easeTo({ pitch: flat ? 0 : DEFAULT_CAMERA.pitch, duration: 600 });
     if (flat) map.dragRotate.disable();
     else map.dragRotate.enable();
@@ -366,6 +455,7 @@ export default function CampusMap(props: CampusMapProps) {
       .setLngLat(coords[coords.length - 1] as LngLat)
       .addTo(map);
     if (propsRef.current.follow) return;
+    endIntroRef.current();
     const bounds = coords.reduce((b, c) => b.extend(c as LngLat), new LngLatBounds(coords[0] as LngLat, coords[0] as LngLat));
     map.fitBounds(bounds, {
       padding: { top: 150, bottom: Math.min(380, map.getContainer().clientHeight * 0.45), left: 40, right: 80 },
@@ -379,6 +469,7 @@ export default function CampusMap(props: CampusMapProps) {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !cameraTarget) return;
+    endIntroRef.current();
     map.flyTo({
       center: cameraTarget.center ?? map.getCenter(),
       zoom: cameraTarget.zoom ?? map.getZoom(),

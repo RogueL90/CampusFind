@@ -7,14 +7,18 @@ import type { Category } from "@/lib/types";
 export default function FilterChips({
   hidden,
   nearbyOnly,
+  showLostFound = false,
   onToggle,
   onToggleNearby,
 }: {
   hidden: Set<Category>;
   nearbyOnly: boolean;
+  /** Students never see other people's lost or found items, so the chip is staff-only. */
+  showLostFound?: boolean;
   onToggle: (c: Category) => void;
   onToggleNearby: () => void;
 }) {
+  const categories = showLostFound ? CATEGORIES : CATEGORIES.filter((c) => c.id !== "lost_found");
   return (
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter map">
       <button
@@ -25,7 +29,7 @@ export default function FilterChips({
       >
         ◎ 300 m
       </button>
-      {CATEGORIES.map((c) => {
+      {categories.map((c) => {
         const on = !hidden.has(c.id);
         return (
           <button

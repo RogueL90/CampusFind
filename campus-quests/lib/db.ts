@@ -252,6 +252,14 @@ export async function markAllNotificationsRead(userId: string): Promise<void> {
   unwrap(await supabase().from("notifications").update({ read: true }).eq("user_id", userId).eq("read", false));
 }
 
+export async function deleteNotification(notificationId: string): Promise<void> {
+  unwrap(await supabase().from("notifications").delete().eq("id", notificationId));
+}
+
+export async function deleteAllNotifications(userId: string): Promise<void> {
+  unwrap(await supabase().from("notifications").delete().eq("user_id", userId));
+}
+
 /** The "Simulate walk" path. */
 export async function getDemoPath(name = "clark_walk"): Promise<LineString | null> {
   const row = unwrap(
