@@ -57,10 +57,12 @@ export default function AheadCard({
           </div>
         </div>
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-cyan-100">
-        <span className="font-semibold text-cyan-300">Detour: </span>
-        {obstacle.alert.detour_text}
-      </p>
+      {obstacle.alert.detour_text && (
+        <p className="mt-2 text-xs leading-relaxed text-cyan-100">
+          <span className="font-semibold text-cyan-300">Detour: </span>
+          {obstacle.alert.detour_text}
+        </p>
+      )}
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
         {obstacle.alert.detour_path && (
           <button onClick={() => onShowDetour(obstacle.report.id)} className="rounded-lg bg-cyan-400 px-3 py-1.5 text-xs font-semibold text-slate-950">

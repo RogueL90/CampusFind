@@ -1,20 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getBalance, subscribeReports } from "@/lib/data";
+import { getBalance, subscribeBalance } from "@/lib/data";
+import { isOnMap } from "@/lib/geo/obstacles";
 import { useCurrentUser } from "@/lib/useCurrentUser";
+import { useNow } from "@/lib/useNow";
 import type { Balance, Report } from "@/lib/types";
 
 const VOUCHER_COST = 100;
-
-function useNow(intervalMs: number) {
-  const [now, setNow] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(t);
-  }, [intervalMs]);
-  return now;
-}
 
 export default function StatusCorner({ reports, onOpenReport }: { reports: Report[]; onOpenReport: (id: string) => void }) {
   const user = useCurrentUser();
@@ -36,14 +29,14 @@ export default function StatusCorner({ reports, onOpenReport }: { reports: Repor
         setBalance(b);
       });
     load();
-    const unsubscribe = subscribeReports(load);
+    const unsubscribe = subscribeBalance(user.id, load);
     return () => {
       alive = false;
       unsubscribe();
     };
   }, [user.id]);
 
-  const open = reports.filter((r) => !["fixed", "verified", "picked_up", "closed"].includes(r.status)).length;
+  const open = reports.filter(isOnMap).length;
   const active = reports.find((r) => r.mission?.status === "claimed" && r.mission.claimed_by === user.id);
   const remainingMs = active?.mission?.claim_expires_at && now ? Date.parse(active.mission.claim_expires_at) - now : 30 * 60_000;
   const mm = Math.max(0, Math.floor(remainingMs / 60000));

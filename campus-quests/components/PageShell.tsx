@@ -1,25 +1,38 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
+import NotificationBell from "./NotificationBell";
 import UserSwitcher from "./UserSwitcher";
 
-export default function PageShell({ title, children }: { title: string; children: ReactNode }) {
+export default function PageShell({ title, back, children }: { title: string; back?: string; children: ReactNode }) {
   return (
     <div className="h-full overflow-y-auto">
       <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-cyan-400/15 bg-[#05080f]/90 px-4 py-3 backdrop-blur">
-        <h1 className="font-mono text-sm uppercase tracking-widest text-cyan-300">{title}</h1>
-        <UserSwitcher />
+        <div className="flex min-w-0 items-center gap-2">
+          {back && (
+            <Link href={back} aria-label="Back" className="text-lg leading-none text-slate-400">
+              ‹
+            </Link>
+          )}
+          <h1 className="truncate font-mono text-sm uppercase tracking-widest text-cyan-300">{title}</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <NotificationBell />
+          <UserSwitcher />
+        </div>
       </header>
       <div className="mx-auto max-w-2xl p-4">{children}</div>
     </div>
   );
 }
 
-export function ComingSoon({ owner, what }: { owner: string; what: string }) {
+export function Empty({ children }: { children: ReactNode }) {
+  return <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-400">{children}</div>;
+}
+
+export function ErrorNote({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-sm text-slate-400">
-      <p className="text-slate-200">{what}</p>
-      <p className="mt-2">
-        Built by {owner}. See <code className="text-cyan-300">roles/</code> in the project docs.
-      </p>
-    </div>
+    <p role="alert" className="rounded-xl bg-rose-500/15 p-3 text-sm text-rose-200">
+      {children}
+    </p>
   );
 }

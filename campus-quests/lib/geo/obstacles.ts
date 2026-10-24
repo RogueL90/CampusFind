@@ -12,13 +12,17 @@ export interface Obstacle {
   color: string;
 }
 
-const CLOSED = new Set(["fixed", "verified", "picked_up", "closed"]);
+const OFF_MAP = new Set(["resolved", "closed", "checked_in"]);
 
+/** Resolved issues, and items already handed in at Lost & Found, leave the map. */
+export const isOnMap = (r: Pick<Report, "status">) => !OFF_MAP.has(r.status);
+
+/** Unconfirmed student-reported obstacles show as ordinary beacons until staff or 3 "Me too" votes confirm them. */
 export function buildObstacles(reports: Report[], alerts: AccessAlert[], needs: AccessNeed[]): Obstacle[] {
   const byId = new Map(reports.map((r) => [r.id, r]));
   return alerts.flatMap((alert) => {
     const report = byId.get(alert.report_id);
-    if (!report || CLOSED.has(report.status)) return [];
+    if (!report || !alert.confirmed || !isOnMap(report)) return [];
     const relevant = needs.length === 0 || alert.affects.some((n) => needs.includes(n));
     const center = report.footprint
       ? (turf.centroid(report.footprint).geometry.coordinates as LngLat)
@@ -99,7 +103,7 @@ export interface MapLayersData {
 }
 
 export function beaconHeight(r: Report): number {
-  return Math.min(80, 15 + r.severity * 8 + r.votes * 3);
+  return Math.min(80, 15 + (r.severity ?? 2) * 8 + r.votes * 3);
 }
 
 export function buildMapLayers(
@@ -110,7 +114,7 @@ export function buildMapLayers(
   focusedId: string | null,
 ): MapLayersData {
   const obstacleIds = new Set(obstacles.map((o) => o.report.id));
-  const visible = reports.filter((r) => !hidden.has(r.category) && !CLOSED.has(r.status));
+  const visible = reports.filter((r) => !hidden.has(r.category) && isOnMap(r));
 
   const beacons: Feature<Polygon>[] = [];
   const beaconGlow: Feature<Point>[] = [];
@@ -119,7 +123,7 @@ export function buildMapLayers(
     if (obstacleIds.has(r.id)) continue;
     const color = CATEGORY_BY_ID[r.category].color;
     if (r.kind === "lost") {
-      lostAreas.push(turf.circle([r.lng, r.lat], r.area_radius_m ?? 50, { units: "meters", steps: 48, properties: { id: r.id, color } }));
+      lostAreas.push(turf.circle([r.lng, r.lat], r.item?.radius_m ?? 50, { units: "meters", steps: 48, properties: { id: r.id, color } }));
       continue;
     }
     beacons.push(

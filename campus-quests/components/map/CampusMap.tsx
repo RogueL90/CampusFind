@@ -171,9 +171,9 @@ function makeTag(o: Obstacle, onClick: () => void) {
   icon.className = "hud-tag-icon";
   icon.textContent = o.alert.impact === "blocks" ? "⛔" : "⚠";
   const text = document.createElement("span");
-  text.textContent = o.alert.label;
+  text.textContent = o.alert.label ?? o.report.title;
   el.append(icon, text);
-  el.setAttribute("aria-label", `${o.report.title}. ${o.alert.detour_text}`);
+  el.setAttribute("aria-label", [o.report.title, o.alert.detour_text].filter(Boolean).join(". "));
   el.addEventListener("click", (e) => {
     e.stopPropagation();
     onClick();

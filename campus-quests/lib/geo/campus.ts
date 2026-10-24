@@ -27,6 +27,7 @@ export const CATEGORIES: { id: Category; label: string; icon: string; color: str
   { id: "accessibility", label: "Access", icon: "♿", color: "#f43f5e" },
   { id: "pests", label: "Pests", icon: "🐀", color: "#c084fc" },
   { id: "lost_found", label: "Lost & Found", icon: "🎒", color: "#facc15" },
+  { id: "other", label: "Other", icon: "📝", color: "#94a3b8" },
 ];
 
 export const CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map((c) => [c.id, c])) as Record<

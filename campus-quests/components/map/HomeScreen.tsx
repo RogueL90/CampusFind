@@ -1,7 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import * as turf from "@turf/turf";
 import { getAccessAlerts, getReports, subscribeReports, voteMeToo } from "@/lib/data";
 import { CATEGORY_BY_ID, DEFAULT_CAMERA, DEMO_GEOMETRY, type LngLat } from "@/lib/geo/campus";
@@ -15,6 +16,7 @@ import AheadCard from "@/components/hud/AheadCard";
 import FilterChips from "@/components/hud/FilterChips";
 import AccessPanel, { DEFAULT_ACCESS_PROFILE } from "@/components/hud/AccessPanel";
 import ReportSheet from "@/components/ReportSheet";
+import NotificationBell from "@/components/NotificationBell";
 import UserSwitcher from "@/components/UserSwitcher";
 import { useLocation } from "./useLocation";
 import type { CameraTarget } from "./CampusMap";
@@ -56,6 +58,15 @@ function ControlButton({ label, icon, onClick, active }: { label: string; icon: 
       <span className="mt-1 font-mono text-[8px] uppercase tracking-wider text-slate-400">{label}</span>
     </button>
   );
+}
+
+/** Opens `/?report=<id>` links from the inbox and the report flow. */
+function ReportDeepLink({ onOpen }: { onOpen: (id: string) => void }) {
+  const id = useSearchParams().get("report");
+  useEffect(() => {
+    if (id) onOpen(id);
+  }, [id, onOpen]);
+  return null;
 }
 
 export default function HomeScreen() {
@@ -134,7 +145,7 @@ export default function HomeScreen() {
     navigator.vibrate?.([250, 120, 250]);
     const current = latest.current.ahead;
     if (latest.current.voice && current) {
-      speak(`${current.obstacle.report.title}, ${Math.round(current.distance)} meters ahead. ${current.obstacle.alert.detour_text}`);
+      speak(`${current.obstacle.report.title}, ${Math.round(current.distance)} meters ahead. ${current.obstacle.alert.detour_text ?? ""}`);
     }
   }, [alertId]);
 
@@ -167,6 +178,10 @@ export default function HomeScreen() {
   }, [readings, reports, allObstacles, hidden, loc.pos]);
 
   const selected = reports.find((r) => r.id === selectedId) ?? null;
+  const openFromLink = useCallback((id: string) => {
+    setSelectedId(id);
+    setFollow(false);
+  }, []);
 
   const toggleCategory = (c: Category) =>
     setHidden((prev) => {
@@ -246,7 +261,10 @@ export default function HomeScreen() {
             {loc.error && <div className="hud-panel w-44 rounded-lg px-2 py-1 text-[10px] text-rose-300">{loc.error}</div>}
           </div>
           <div className="pointer-events-auto flex flex-col items-end gap-2">
-            <UserSwitcher compact />
+            <div className="flex gap-1.5">
+              <NotificationBell />
+              <UserSwitcher compact />
+            </div>
             <ControlButton label="Alerts" icon="♿" onClick={() => setShowAccess(true)} active={profile.needs.length > 0} />
             <ControlButton label={profile.flat ? "3D" : "2D"} icon={profile.flat ? "🧊" : "🗺️"} onClick={() => updateProfile({ flat: !profile.flat })} />
             <ControlButton label="North" icon="🧭" onClick={() => flyTo(undefined, { bearing: 0 })} />
@@ -280,7 +298,10 @@ export default function HomeScreen() {
         </div>
       </div>
 
-      {selected && <ReportSheet report={selected} onClose={() => setSelectedId(null)} />}
+      <Suspense fallback={null}>
+        <ReportDeepLink onOpen={openFromLink} />
+      </Suspense>
+      {selected && <ReportSheet key={selected.id} report={selected} onClose={() => setSelectedId(null)} />}
       {showAccess && <AccessPanel profile={profile} onChange={updateProfile} onClose={() => setShowAccess(false)} />}
       {toast && (
         <div className="hud-panel absolute left-1/2 top-24 z-40 -translate-x-1/2 rounded-full px-4 py-2 text-xs text-cyan-100" role="status">
