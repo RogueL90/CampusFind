@@ -28,7 +28,7 @@ create table if not exists reports (
   id                 uuid primary key default gen_random_uuid(),
   reporter_id        uuid references users(id),
   kind               text check (kind in ('issue', 'lost', 'found')),
-  category           text,       -- connectivity, water, waste, paths, accessibility, pests, lost_found
+  category           text,       -- see ISSUE_CATEGORIES in lib/categories.ts, or lost_found
   issue_type         text,
   severity           smallint,
   title              text,
@@ -44,7 +44,12 @@ create table if not exists reports (
   fix_path           fix_path not null,
   hazard_flags       text[] default '{}',
   access_impact      text[] default '{}',
-  routed_to          text,       -- authority chosen by EAiSER
+  routed_to          text,       -- authority id chosen by Claude triage (lib/categories.ts)
+  cc                 text[] default '{}',
+  identified         text,       -- what the vision model saw in the photo
+  routing_reason     text,
+  report_subject     text,       -- the report sent to the authority
+  report_body        text,
   contains_sensitive boolean not null default false,
   status             text not null default 'submitted',
   created_at         timestamptz default now()
@@ -85,6 +90,7 @@ create table if not exists notifications (
 );
 
 create index if not exists reports_open_lost on reports (created_at desc) where kind = 'lost' and status = 'open';
+create index if not exists reports_routed on reports (routed_to, created_at desc);
 create index if not exists notifications_user on notifications (user_id, created_at desc);
 
 -- Public bucket for report photos

@@ -1,22 +1,28 @@
 "use client";
 
+// Report flow: snap a photo, drop a pin, and Claude does the rest (what it is, who handles it,
+// and the written report). The student just checks it and taps Send.
+
 import Link from "next/link";
 import { useRef, useState } from "react";
 import PinPicker, { type PinValue } from "@/components/PinPicker";
+import { AUTHORITIES, AUTHORITY_IDS, authorityName, ISSUE_CATEGORIES, ISSUE_CATEGORY_IDS } from "@/lib/categories";
 import { fixPath } from "@/lib/fixPath";
 import { resizeImage } from "@/lib/resizeImage";
-import { CATEGORIES, HAZARD_FLAGS, type ReportKind, type Triage } from "@/lib/types";
+import { HAZARD_FLAGS, type ReportKind, type Triage } from "@/lib/types";
 
-type Step = "type" | "photo" | "pin" | "confirm" | "done";
-type Saved = { report: { id: string; fix_path: string; routed_to: string | null }; matches: { match_id: string }[] };
+type Step = "photo" | "pin" | "confirm" | "done";
+type Saved = {
+  report: { id: string; fix_path: string; routed_to: string | null; cc: string[]; report_subject: string | null; report_body: string | null };
+  matches: { match_id: string }[];
+};
 
-const KINDS: { kind: ReportKind; label: string; hint: string; emoji: string }[] = [
-  { kind: "issue", label: "Report an issue", hint: "Slow Wi-Fi, broken filler, pothole, trash", emoji: "⚠️" },
-  { kind: "lost", label: "I lost something", hint: "Photo + rough area, we watch for it", emoji: "🔍" },
-  { kind: "found", label: "I found something", hint: "Snap it, pin it, bring it to Lost & Found", emoji: "🎒" },
+const KINDS: { kind: ReportKind; label: string }[] = [
+  { kind: "issue", label: "Problem" },
+  { kind: "lost", label: "Lost item" },
+  { kind: "found", label: "Found item" },
 ];
 
-const AUTHORITIES = ["Facilities", "IT", "Grounds", "Housing"];
 const ACCESS = ["wheelchair", "low_vision", "no_stairs", "crutches"];
 
 /** Quick picks for "when did you lose it?" */
@@ -51,117 +57,97 @@ const clock = () => Date.now();
 const field = "mt-1 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-white";
 
 export default function ReportPage() {
-  const [step, setStep] = useState<Step>("type");
+  const [step, setStep] = useState<Step>("photo");
   const [kind, setKind] = useState<ReportKind>("issue");
   const [preview, setPreview] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [note, setNote] = useState("");
   const [pin, setPin] = useState<PinValue | null>(null);
   const [when, setWhen] = useState("unsure");
   const [atOffice, setAtOffice] = useState(false);
   const [triage, setTriage] = useState<Triage | null>(null);
   const [triaging, setTriaging] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
   const startedAt = useRef(0);
   const [elapsed, setElapsed] = useState(0);
-  const uploadPromise = useRef<Promise<string | null> | null>(null);
   const triagePromise = useRef<Promise<Triage | null> | null>(null);
 
   const isItem = kind !== "issue";
 
   function reset() {
-    setStep("type");
+    setStep("photo");
+    setKind("issue");
     setPreview(null);
     setPhotoUrl(null);
-    setNote("");
     setPin(null);
     setWhen("unsure");
     setAtOffice(false);
     setTriage(null);
+    setShowDetails(false);
     setSaved(null);
     setError(null);
-    uploadPromise.current = null;
     triagePromise.current = null;
   }
 
-  function chooseKind(k: ReportKind) {
-    setKind(k);
-    startedAt.current = clock();
-    setStep("photo");
-  }
-
-  /** Upload starts the moment a photo is picked, so it's done by the time they tap Next. */
-  function onPhoto(file: File | undefined) {
+  /**
+   * Upload starts the moment a photo is picked, and Claude's triage right after, so the
+   * report is usually ready by the time the pin is placed.
+   */
+  function onPhoto(file: File | undefined, k: ReportKind = kind) {
     if (!file) return;
+    startedAt.current = clock();
     setPreview(URL.createObjectURL(file));
     setPhotoUrl(null);
+    setTriage(null);
     setError(null);
     setUploading(true);
-    uploadPromise.current = (async () => {
+    setTriaging(true);
+    triagePromise.current = (async () => {
       try {
         const blob = await resizeImage(file);
         const fd = new FormData();
         fd.append("photo", blob, "photo.jpg");
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
-        if (!res.ok) throw new Error((await res.json()).error ?? "Upload failed");
-        const { url } = (await res.json()) as { url: string };
+        const up = await fetch("/api/upload", { method: "POST", body: fd });
+        if (!up.ok) throw new Error((await up.json()).error ?? "Upload failed");
+        const { url } = (await up.json()) as { url: string };
         setPhotoUrl(url);
-        return url;
+        setUploading(false);
+        const res = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ photoUrl: url, kind: k }),
+        });
+        if (!res.ok) throw new Error("Couldn't read the photo");
+        const t = (await res.json()) as Triage;
+        setTriage(t);
+        return t;
       } catch (e) {
         setError((e as Error).message);
         return null;
       } finally {
         setUploading(false);
-      }
-    })();
-  }
-
-  /** Triage runs while the student places the pin. */
-  function photoNext() {
-    setStep("pin");
-    setTriaging(true);
-    triagePromise.current = (async () => {
-      const url = await uploadPromise.current;
-      try {
-        const res = await fetch("/api/triage", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ photoUrl: url, note, kind }),
-        });
-        const t = (await res.json()) as Triage;
-        setTriage(t);
-        return t;
-      } catch {
-        setError("AI couldn't read the photo. Fill in the details below.");
-        return null;
-      } finally {
         setTriaging(false);
       }
     })();
+    setStep((s) => (s === "photo" ? "pin" : s));
+  }
+
+  /** Changing problem/lost/found after the photo re-runs triage with the right framing. */
+  function chooseKind(k: ReportKind) {
+    setKind(k);
+    if (preview && step !== "photo") {
+      fetch(preview)
+        .then((r) => r.blob())
+        .then((b) => onPhoto(new File([b], "photo.jpg", { type: b.type }), k));
+    }
   }
 
   async function pinNext() {
     setStep("confirm");
-    const t = await triagePromise.current;
-    if (!t)
-      setTriage((cur) =>
-        cur ?? {
-          category: isItem ? "lost_found" : "waste",
-          issue_type: isItem ? "unknown_item" : "other",
-          severity: isItem ? 1 : 3,
-          title: "",
-          hazard_flags: [],
-          access_impact: [],
-          routed_to: isItem ? "Lost & Found office" : null,
-          contains_sensitive: false,
-          color: null,
-          brand: null,
-          marks: null,
-        },
-      );
+    await triagePromise.current;
   }
 
   async function submit() {
@@ -177,7 +163,6 @@ export default function ReportPage() {
           kind,
           triage,
           photoUrl,
-          note: note || null,
           lat: pin.lat,
           lng: pin.lng,
           radiusM: pin.radiusM,
@@ -187,7 +172,7 @@ export default function ReportPage() {
           atOffice,
         }),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Couldn't save");
+      if (!res.ok) throw new Error((await res.json()).error ?? "Couldn't send");
       setSaved(await res.json());
       setElapsed(Math.round((clock() - startedAt.current) / 1000));
       setStep("done");
@@ -199,117 +184,100 @@ export default function ReportPage() {
   }
 
   const set = <K extends keyof Triage>(k: K, v: Triage[K]) => setTriage((t) => (t ? { ...t, [k]: v } : t));
-  const toggle = (k: "hazard_flags" | "access_impact", v: string) =>
-    setTriage((t) =>
-      t ? { ...t, [k]: t[k].includes(v) ? t[k].filter((x) => x !== v) : [...t[k], v] } : t,
-    );
+  const toggle = (k: "hazard_flags" | "access_impact" | "cc", v: string) =>
+    setTriage((t) => (t ? { ...t, [k]: t[k].includes(v) ? t[k].filter((x) => x !== v) : [...t[k], v] } : t));
 
-  const stepIndex = ["type", "photo", "pin", "confirm"].indexOf(step);
+  const stepIndex = ["photo", "pin", "confirm"].indexOf(step);
 
   return (
     <div className="space-y-5">
       {step !== "done" && (
         <div className="flex items-center gap-3">
-          {step !== "type" && (
+          {step !== "photo" && (
             <button
               type="button"
               aria-label="Back"
-              onClick={() => setStep((["type", "photo", "pin"] as Step[])[stepIndex - 1] ?? "type")}
+              onClick={() => setStep(step === "confirm" ? "pin" : "photo")}
               className="rounded-full border border-white/15 px-3 py-1 text-sm"
             >
               ←
             </button>
           )}
           <div className="flex flex-1 gap-1.5">
-            {[0, 1, 2, 3].map((i) => (
+            {[0, 1, 2].map((i) => (
               <div key={i} className={`h-1.5 flex-1 rounded-full ${i <= stepIndex ? "bg-cyan-300" : "bg-white/10"}`} />
             ))}
           </div>
         </div>
       )}
 
-      {step === "type" && (
-        <section className="space-y-3">
-          <h1 className="text-2xl font-semibold">What are you reporting?</h1>
+      {step !== "done" && (
+        <div className="grid grid-cols-3 gap-1 rounded-xl bg-white/5 p-1 text-sm" role="radiogroup" aria-label="Report type">
           {KINDS.map((k) => (
             <button
               key={k.kind}
               type="button"
+              role="radio"
+              aria-checked={kind === k.kind}
               onClick={() => chooseKind(k.kind)}
-              className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-left active:scale-[0.99]"
+              className={`rounded-lg py-2 ${kind === k.kind ? "bg-white font-medium text-slate-900" : "text-white/70"}`}
             >
-              <span className="text-3xl">{k.emoji}</span>
-              <span>
-                <span className="block font-medium">{k.label}</span>
-                <span className="block text-sm text-white/60">{k.hint}</span>
-              </span>
+              {k.label}
             </button>
           ))}
-        </section>
+        </div>
       )}
 
       {step === "photo" && (
         <section className="space-y-4">
           <h1 className="text-2xl font-semibold">
-            {kind === "lost" ? "Add a photo of it" : kind === "found" ? "Snap the item" : "Snap the problem"}
+            {kind === "lost" ? "Show us what you lost" : kind === "found" ? "Snap what you found" : "Snap the problem"}
           </h1>
-          {kind === "lost" && (
-            <p className="text-sm text-white/60">No photo of your own? A product photo of the same model works too.</p>
-          )}
-          {preview ? (
-            // eslint-disable-next-line @next/next/no-img-element -- local object URL
-            <img src={preview} alt="Your photo" className="aspect-square w-full rounded-2xl object-cover" />
-          ) : (
-            <div className="grid aspect-square w-full place-items-center rounded-2xl border border-dashed border-white/20 text-white/40">
-              No photo yet
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            <label className="cursor-pointer rounded-xl bg-cyan-300 py-3 text-center font-medium text-slate-900">
-              📷 {preview ? "Retake" : "Take photo"}
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={(e) => onPhoto(e.target.files?.[0])}
-              />
-            </label>
-            <label className="cursor-pointer rounded-xl border border-white/15 bg-white/5 py-3 text-center">
-              🖼️ Gallery
-              <input type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
-            </label>
-          </div>
-          <label className="block text-sm text-white/70">
-            Anything to add? <span className="text-white/40">(optional)</span>
+          <p className="text-sm text-white/60">
+            {kind === "lost"
+              ? "Your own photo or a product photo of the same model. AI fills in the details."
+              : "AI figures out what it is, who should fix it, and writes the report."}
+          </p>
+          <label className="grid aspect-square w-full cursor-pointer place-items-center rounded-2xl border-2 border-dashed border-cyan-300/40 bg-cyan-300/5 text-center">
+            <span>
+              <span className="block text-5xl">📷</span>
+              <span className="mt-2 block font-medium text-cyan-200">Take photo</span>
+            </span>
             <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder={isItem ? "black AirPods case, smiley sticker" : "trash overflowing by the entrance"}
-              className={field}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => onPhoto(e.target.files?.[0])}
             />
           </label>
-          {error && <p className="text-sm text-rose-300">{error}</p>}
-          <button
-            type="button"
-            disabled={!preview}
-            onClick={photoNext}
-            className="w-full rounded-xl bg-white py-3 font-medium text-slate-900 disabled:opacity-30"
-          >
-            {uploading ? "Uploading… Next" : "Next"}
-          </button>
+          <label className="block cursor-pointer rounded-xl border border-white/15 bg-white/5 py-3 text-center">
+            🖼️ Choose from gallery
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
+          </label>
         </section>
       )}
 
       {step === "pin" && (
         <section className="space-y-4">
+          <div className="flex items-center gap-3">
+            {preview && (
+              // eslint-disable-next-line @next/next/no-img-element -- local object URL
+              <img src={preview} alt="Your photo" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
+            )}
+            <p className="text-sm text-white/60">
+              {uploading ? "Uploading…" : triaging ? "✨ AI is looking at your photo…" : triage ? "✨ AI report ready" : ""}
+            </p>
+          </div>
           <h1 className="text-2xl font-semibold">
             {kind === "lost" ? "Where did you lose it?" : kind === "found" ? "Where did you find it?" : "Where is it?"}
           </h1>
           <PinPicker onChange={setPin} showRadius={kind === "lost"} initial={pin ?? undefined} />
           {kind === "lost" && (
             <div>
-              <p className="text-sm text-white/70">When? <span className="text-white/40">(optional)</span></p>
+              <p className="text-sm text-white/70">
+                When? <span className="text-white/40">(optional)</span>
+              </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {[
                   ["1h", "Last hour"],
@@ -334,11 +302,16 @@ export default function ReportPage() {
           )}
           {kind === "found" && (
             <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
-              <input type="checkbox" checked={atOffice} onChange={(e) => setAtOffice(e.target.checked)} className="h-5 w-5 accent-cyan-300" />
+              <input
+                type="checkbox"
+                checked={atOffice}
+                onChange={(e) => setAtOffice(e.target.checked)}
+                className="h-5 w-5 accent-cyan-300"
+              />
               I already dropped it at the Lost & Found office
             </label>
           )}
-          <p className="text-xs text-white/50">{triaging ? "✨ AI is reading your photo…" : triage ? "✨ AI details ready" : ""}</p>
+          {error && <p className="text-sm text-rose-300">{error}</p>}
           <button
             type="button"
             disabled={!pin}
@@ -352,103 +325,166 @@ export default function ReportPage() {
 
       {step === "confirm" && (
         <section className="space-y-4">
-          <div className="flex items-end justify-between">
-            <h1 className="text-2xl font-semibold">Look right?</h1>
-            {triage?.source && (
-              <span className="rounded-full bg-cyan-300/15 px-2 py-0.5 text-xs text-cyan-200">
-                ✨ filled by {triage.source === "mock" ? "demo AI" : triage.source === "eaiser" ? "EAiSER" : "AI"}
-              </span>
-            )}
-          </div>
           {!triage ? (
-            <p className="py-10 text-center text-white/60">✨ AI is filling in the details…</p>
+            <div className="space-y-3 py-10 text-center">
+              {error ? (
+                <>
+                  <p className="text-rose-300">{error}</p>
+                  <button type="button" onClick={() => setStep("photo")} className="rounded-xl border border-white/15 px-4 py-2">
+                    Try another photo
+                  </button>
+                </>
+              ) : (
+                <p className="text-white/60">✨ AI is writing your report…</p>
+              )}
+            </div>
           ) : (
             <>
-              <div className="flex gap-3">
+              <div className="flex items-start gap-3">
                 {preview && (
                   // eslint-disable-next-line @next/next/no-img-element -- local object URL
                   <img src={preview} alt="" className="h-20 w-20 shrink-0 rounded-xl object-cover" />
                 )}
-                <label className="flex-1 text-sm text-white/70">
-                  Title
-                  <input value={triage.title} onChange={(e) => set("title", e.target.value)} className={field} />
-                </label>
+                <div className="min-w-0">
+                  <span className="rounded-full bg-cyan-300/15 px-2 py-0.5 text-xs text-cyan-200">
+                    ✨ {triage.source === "claude" ? "Claude" : "Demo AI"} identified
+                  </span>
+                  <p className="mt-1 text-lg font-semibold leading-snug">
+                    {isItem ? "" : `${ISSUE_CATEGORIES[triage.category as keyof typeof ISSUE_CATEGORIES]?.icon ?? ""} `}
+                    {triage.title}
+                  </p>
+                  {triage.identified && <p className="mt-1 text-sm text-white/70">{triage.identified}</p>}
+                </div>
               </div>
 
-              {isItem ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="col-span-2 text-sm text-white/70">
-                    Item
-                    <input value={triage.issue_type.replace(/_/g, " ")} onChange={(e) => set("issue_type", e.target.value.trim().replace(/\s+/g, "_").toLowerCase())} className={field} />
-                  </label>
-                  <label className="text-sm text-white/70">
-                    Color
-                    <input value={triage.color ?? ""} onChange={(e) => set("color", e.target.value || null)} className={field} />
-                  </label>
-                  <label className="text-sm text-white/70">
-                    Brand
-                    <input value={triage.brand ?? ""} onChange={(e) => set("brand", e.target.value || null)} className={field} />
-                  </label>
-                  <label className="col-span-2 text-sm text-white/70">
-                    Marks (stickers, case, engraving)
-                    <input value={triage.marks ?? ""} onChange={(e) => set("marks", e.target.value || null)} className={field} />
-                  </label>
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs uppercase tracking-wide text-white/50">Sending to</p>
+                <p className="font-medium">{authorityName(triage.routed_to)}</p>
+                {triage.cc.length > 0 && (
+                  <p className="text-sm text-white/60">cc {triage.cc.map(authorityName).join(", ")}</p>
+                )}
+                {!isItem && <p className="mt-1 text-sm text-white/60">{triage.routing_reason}</p>}
+                {!isItem && (
+                  <p className="mt-2 text-sm">
+                    Severity <b>{triage.severity}/5</b>
+                    {triage.hazard_flags.length > 0 && (
+                      <span className="text-rose-300"> · {triage.hazard_flags.map((h) => h.replace(/_/g, " ")).join(", ")}</span>
+                    )}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="text-xs uppercase tracking-wide text-white/50">Report</p>
+                <input
+                  aria-label="Report subject"
+                  value={triage.report_subject}
+                  onChange={(e) => set("report_subject", e.target.value)}
+                  className={`${field} font-medium`}
+                />
+                <textarea
+                  aria-label="Report body"
+                  value={triage.report_body}
+                  onChange={(e) => set("report_body", e.target.value)}
+                  rows={7}
+                  className={`${field} text-sm leading-relaxed`}
+                />
+                <p className="mt-1 text-xs text-white/40">Location and time are added automatically.</p>
+              </div>
+
+              {isItem && (
+                <div className="grid grid-cols-3 gap-2">
+                  {(["color", "brand", "marks"] as const).map((k) => (
+                    <label key={k} className="text-xs capitalize text-white/60">
+                      {k}
+                      <input value={triage[k] ?? ""} onChange={(e) => set(k, e.target.value || null)} className={`${field} text-sm`} />
+                    </label>
+                  ))}
                 </div>
-              ) : (
-                <div className="space-y-3">
+              )}
+
+              {!isItem && (
+                <button type="button" onClick={() => setShowDetails((s) => !s)} className="text-sm text-cyan-300">
+                  {showDetails ? "Hide details" : "Something wrong? Edit details"}
+                </button>
+              )}
+              {!isItem && showDetails && (
+                <div className="space-y-3 rounded-2xl border border-white/10 p-4">
                   <div className="grid grid-cols-2 gap-3">
                     <label className="text-sm text-white/70">
                       Category
-                      <select value={triage.category} onChange={(e) => set("category", e.target.value as Triage["category"])} className={field}>
-                        {CATEGORIES.filter((c) => c !== "lost_found").map((c) => (
-                          <option key={c} value={c} className="bg-slate-900">{c}</option>
+                      <select
+                        value={triage.category}
+                        onChange={(e) => set("category", e.target.value as Triage["category"])}
+                        className={field}
+                      >
+                        {ISSUE_CATEGORY_IDS.map((c) => (
+                          <option key={c} value={c} className="bg-slate-900">
+                            {ISSUE_CATEGORIES[c].label}
+                          </option>
                         ))}
                       </select>
                     </label>
                     <label className="text-sm text-white/70">
-                      Goes to
-                      <select value={triage.routed_to ?? ""} onChange={(e) => set("routed_to", e.target.value || null)} className={field}>
-                        <option value="" className="bg-slate-900">EAiSER decides</option>
-                        {AUTHORITIES.map((a) => (
-                          <option key={a} value={a} className="bg-slate-900">{a}</option>
+                      Send to
+                      <select value={triage.routed_to ?? ""} onChange={(e) => set("routed_to", e.target.value)} className={field}>
+                        {AUTHORITY_IDS.filter((a) => a !== "lost_found").map((a) => (
+                          <option key={a} value={a} className="bg-slate-900">
+                            {AUTHORITIES[a].name}
+                          </option>
                         ))}
                       </select>
                     </label>
                   </div>
-                  <label className="block text-sm text-white/70">
-                    Type
-                    <input value={triage.issue_type.replace(/_/g, " ")} onChange={(e) => set("issue_type", e.target.value.trim().replace(/\s+/g, "_").toLowerCase())} className={field} />
-                  </label>
                   <div className="text-sm text-white/70">
                     Severity
                     <div className="mt-1 grid grid-cols-5 gap-1.5">
                       {[1, 2, 3, 4, 5].map((s) => (
-                        <button key={s} type="button" onClick={() => set("severity", s)}
-                          className={`rounded-lg py-2 ${triage.severity === s ? "bg-cyan-300 font-semibold text-slate-900" : "bg-white/5"}`}>
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => set("severity", s)}
+                          className={`rounded-lg py-2 ${triage.severity === s ? "bg-cyan-300 font-semibold text-slate-900" : "bg-white/5"}`}
+                        >
                           {s}
                         </button>
                       ))}
                     </div>
                   </div>
+                  <Chips
+                    label="Also notify"
+                    options={AUTHORITY_IDS.filter((a) => a !== triage.routed_to && a !== "lost_found")}
+                    labels={(a) => AUTHORITIES[a as keyof typeof AUTHORITIES].name}
+                    value={triage.cc}
+                    onToggle={(v) => toggle("cc", v)}
+                    tone="cyan"
+                  />
                   <Chips label="Hazards" options={[...HAZARD_FLAGS]} value={triage.hazard_flags} onToggle={(v) => toggle("hazard_flags", v)} tone="rose" />
                   <Chips label="Blocks access for" options={ACCESS} value={triage.access_impact} onToggle={(v) => toggle("access_impact", v)} tone="amber" />
-                  <FixPathBadge path={fixPath({ kind, ...triage })} />
+                  <label className="flex items-center gap-3 text-sm text-white/70">
+                    <input
+                      type="checkbox"
+                      checked={triage.contains_sensitive}
+                      onChange={(e) => set("contains_sensitive", e.target.checked)}
+                      className="h-5 w-5 accent-cyan-300"
+                    />
+                    Photo shows an ID, card, screen, plate or face (blur it for others)
+                  </label>
                 </div>
               )}
 
-              <label className="flex items-center gap-3 text-sm text-white/70">
-                <input type="checkbox" checked={triage.contains_sensitive} onChange={(e) => set("contains_sensitive", e.target.checked)} className="h-5 w-5 accent-cyan-300" />
-                Photo shows an ID, card, screen or face (blur it for others)
-              </label>
+              {!isItem && fixPath({ kind, ...triage }) === "self_fixable" && (
+                <p className="rounded-xl bg-white/5 px-3 py-2 text-sm text-white/80">🎯 Students can help: this also becomes a mission</p>
+              )}
 
               {error && <p className="text-sm text-rose-300">{error}</p>}
               <button
                 type="button"
-                disabled={saving || !triage.title.trim()}
+                disabled={saving || !pin || !triage.report_subject.trim()}
                 onClick={submit}
                 className="w-full rounded-xl bg-cyan-300 py-3.5 text-lg font-semibold text-slate-900 disabled:opacity-40"
               >
-                {saving ? "Saving…" : "Confirm"}
+                {saving ? "Sending…" : isItem ? "Confirm" : `Send to ${authorityName(triage.routed_to).split(" – ")[0]}`}
               </button>
             </>
           )}
@@ -456,25 +492,34 @@ export default function ReportPage() {
       )}
 
       {step === "done" && saved && (
-        <section className="space-y-4 pt-6 text-center">
-          <div className="text-5xl">✅</div>
-          <h1 className="text-2xl font-semibold">Reported in {elapsed}s</h1>
-          <p className="text-white/70">
-            {kind === "lost" && "We'll watch every found item for it and ping you the moment there's a likely match."}
-            {kind === "found" &&
-              (saved.matches.length
-                ? "Good news: it looks like someone lost this. We've let them know. Please take it to the Lost & Found office."
-                : "Thanks! Please take it to the Lost & Found office. We'll match it as soon as the owner reports it.")}
-            {kind === "issue" &&
-              `Sent to ${saved.report.routed_to ?? "the right campus team"}. ${
-                saved.report.fix_path === "self_fixable" ? "It's also a mission on the map other students can help with." : ""
-              }`}
-          </p>
+        <section className="space-y-4 pt-4">
+          <div className="text-center">
+            <div className="text-5xl">✅</div>
+            <h1 className="mt-2 text-2xl font-semibold">Reported in {elapsed}s</h1>
+            <p className="mt-1 text-white/70">
+              {kind === "lost" && "We'll watch every found item for it and ping you the moment there's a likely match."}
+              {kind === "found" &&
+                (saved.matches.length
+                  ? "Good news: it looks like someone lost this. We've let them know. Please take it to the Lost & Found office."
+                  : "Thanks! Please take it to the Lost & Found office. We'll match it as soon as the owner reports it.")}
+              {kind === "issue" &&
+                `Sent to ${authorityName(saved.report.routed_to)}${
+                  saved.report.cc.length ? `, cc ${saved.report.cc.map(authorityName).join(", ")}` : ""
+                }.${saved.report.fix_path === "self_fixable" ? " It's also a mission other students can help with." : ""}`}
+            </p>
+          </div>
+          {kind === "issue" && saved.report.report_body && (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <p className="text-xs uppercase tracking-wide text-white/50">What they received</p>
+              <p className="mt-1 font-medium">{saved.report.report_subject}</p>
+              <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-white/80">{saved.report.report_body}</pre>
+            </div>
+          )}
           <div className="flex gap-2">
             <button type="button" onClick={reset} className="flex-1 rounded-xl border border-white/15 py-3">
               Report another
             </button>
-            <Link href="/inbox" className="flex-1 rounded-xl bg-white py-3 font-medium text-slate-900">
+            <Link href="/inbox" className="flex-1 rounded-xl bg-white py-3 text-center font-medium text-slate-900">
               Inbox
             </Link>
           </div>
@@ -484,27 +529,41 @@ export default function ReportPage() {
   );
 }
 
-function Chips({ label, options, value, onToggle, tone }: { label: string; options: string[]; value: string[]; onToggle: (v: string) => void; tone: "rose" | "amber" }) {
-  const on = tone === "rose" ? "border-rose-300 bg-rose-300/15 text-rose-200" : "border-amber-300 bg-amber-300/15 text-amber-200";
+function Chips({
+  label,
+  options,
+  value,
+  onToggle,
+  tone,
+  labels = (o) => o.replace(/_/g, " "),
+}: {
+  label: string;
+  options: string[];
+  value: string[];
+  onToggle: (v: string) => void;
+  tone: "rose" | "amber" | "cyan";
+  labels?: (o: string) => string;
+}) {
+  const on = {
+    rose: "border-rose-300 bg-rose-300/15 text-rose-200",
+    amber: "border-amber-300 bg-amber-300/15 text-amber-200",
+    cyan: "border-cyan-300 bg-cyan-300/15 text-cyan-200",
+  }[tone];
   return (
     <div className="text-sm text-white/70">
       {label}
       <div className="mt-1 flex flex-wrap gap-1.5">
         {options.map((o) => (
-          <button key={o} type="button" onClick={() => onToggle(o)}
-            className={`rounded-full border px-2.5 py-1 text-xs ${value.includes(o) ? on : "border-white/15 bg-white/5"}`}>
-            {o.replace(/_/g, " ")}
+          <button
+            key={o}
+            type="button"
+            onClick={() => onToggle(o)}
+            className={`rounded-full border px-2.5 py-1 text-xs ${value.includes(o) ? on : "border-white/15 bg-white/5"}`}
+          >
+            {labels(o)}
           </button>
         ))}
       </div>
     </div>
   );
-}
-
-function FixPathBadge({ path }: { path: string }) {
-  const text =
-    path === "self_fixable"
-      ? "🎯 Students can help: this becomes a mission"
-      : "🛠️ Staff fix: goes to the campus authority";
-  return <p className="rounded-xl bg-white/5 px-3 py-2 text-sm text-white/80">{text}</p>;
 }

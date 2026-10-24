@@ -61,6 +61,11 @@ export async function POST(req: Request) {
     hazard_flags: t.hazard_flags,
     access_impact: t.access_impact,
     routed_to: t.routed_to,
+    cc: t.cc ?? [],
+    identified: t.identified || null,
+    routing_reason: t.routing_reason || null,
+    report_subject: t.report_subject || t.title,
+    report_body: t.report_body || null,
     contains_sensitive: t.contains_sensitive,
     item,
   };

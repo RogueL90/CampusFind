@@ -8,6 +8,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { fixPath } from "./fixPath";
 import type { Item, Match, MatchStatus, NewReport, Notification, Report } from "./types";
+import { reportFooter } from "./reportFooter";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -50,7 +51,8 @@ function must<T>(res: { data: T | null; error: { message: string } | null }): T 
 
 const ITEM_COLS = "category, color, brand, marks, radius_m, lost_from, lost_to, whereabouts";
 const REPORT_SELECT = `id, reporter_id, kind, category, issue_type, severity, title, description, photo_urls, lat, lng,
-  building, floor, fix_path, hazard_flags, access_impact, routed_to, contains_sensitive, status, created_at,
+  building, floor, fix_path, hazard_flags, access_impact, routed_to, cc, identified, routing_reason,
+  report_subject, report_body, contains_sensitive, status, created_at,
   items(${ITEM_COLS})`;
 
 type ReportRow = Omit<Report, "item"> & { items: Item | Item[] | null };
@@ -59,23 +61,33 @@ function fromRow(row: ReportRow): Report {
   return { ...rest, item: Array.isArray(items) ? (items[0] ?? null) : items };
 }
 
-/** Saves a report (and its item details for lost/found). fix_path is always computed here. */
+/**
+ * Saves a report (and its item details for lost/found). fix_path is always computed here,
+ * and the location/time footer is appended to the authority report.
+ */
 export async function createReport(input: NewReport): Promise<Report> {
   const { item, ...fields } = input;
+  const createdAt = now();
   const base = {
     ...fields,
+    report_body:
+      (fields.report_body ?? "") +
+      "\n" +
+      reportFooter({ ...fields, created_at: createdAt, photo: fields.photo_urls[0] ?? null }),
     fix_path: fixPath(fields),
     status: input.status ?? (input.kind === "issue" ? "submitted" : "open"),
   };
 
   const client = sb();
   if (!client) {
-    const report: Report = { ...base, id: crypto.randomUUID(), created_at: now(), item: item ?? null };
+    const report: Report = { ...base, id: crypto.randomUUID(), created_at: createdAt, item: item ?? null };
     mem.reports.set(report.id, report);
     return report;
   }
 
-  const row = must(await client.from("reports").insert(base).select("id").single()) as { id: string };
+  const row = must(
+    await client.from("reports").insert({ ...base, created_at: createdAt }).select("id").single(),
+  ) as { id: string };
   if (item) must(await client.from("items").insert({ report_id: row.id, ...item }));
   return (await getReport(row.id))!;
 }
@@ -113,6 +125,25 @@ export async function listReportsBy(userId: string): Promise<Report[]> {
   if (!client) return [...mem.reports.values()].filter((r) => r.reporter_id === userId).sort(byNewest);
   const rows = must(
     await client.from("reports").select(REPORT_SELECT).eq("reporter_id", userId).order("created_at", { ascending: false }),
+  );
+  return (rows as unknown as ReportRow[]).map(fromRow);
+}
+
+/** Reports routed to (or cc'd to) an authority: what lands in its work queue. */
+export async function listReportsForAuthority(authorityId: string): Promise<Report[]> {
+  const client = sb();
+  if (!client) {
+    return [...mem.reports.values()]
+      .filter((r) => r.routed_to === authorityId || r.cc.includes(authorityId))
+      .sort(byNewest);
+  }
+  const rows = must(
+    await client
+      .from("reports")
+      .select(REPORT_SELECT)
+      .or(`routed_to.eq.${authorityId},cc.cs.{${authorityId}}`)
+      .order("created_at", { ascending: false })
+      .limit(100),
   );
   return (rows as unknown as ReportRow[]).map(fromRow);
 }
@@ -224,11 +255,18 @@ export function getMemPhoto(name: string) {
 }
 
 /**
- * Turns a stored photo URL into something a vision API accepts: public http(s) URLs pass
- * through, in-memory photos become data URLs.
+ * Turns a stored photo URL into a data URL for the vision model. Remote photos (Supabase
+ * Storage) are fetched here rather than handed to the API as URLs, so a slow or
+ * bot-blocking host can't fail the triage.
  */
 export async function photoForModel(url: string): Promise<string | null> {
-  if (url.startsWith("data:") || /^https?:\/\//.test(url)) return url;
+  if (url.startsWith("data:")) return url;
+  if (/^https?:\/\//.test(url)) {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const type = res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg";
+    return `data:${type};base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
+  }
   const m = url.match(/^\/api\/photos\/(.+)$/);
   const p = m ? mem.photos.get(m[1]) : null;
   if (!p) return null;

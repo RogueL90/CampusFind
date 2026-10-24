@@ -1,27 +1,11 @@
 // Shared shapes for reports, triage, matches and notifications.
 // Field names follow the MASTER.md data model.
 
+import type { Category } from "./categories";
+export type { Category } from "./categories";
+
 export type ReportKind = "issue" | "lost" | "found";
 export type FixPath = "staff" | "self_fixable" | "lost_found";
-
-export type Category =
-  | "connectivity"
-  | "water"
-  | "waste"
-  | "paths"
-  | "accessibility"
-  | "pests"
-  | "lost_found";
-
-export const CATEGORIES: Category[] = [
-  "connectivity",
-  "water",
-  "waste",
-  "paths",
-  "accessibility",
-  "pests",
-  "lost_found",
-];
 
 export const HAZARD_FLAGS = [
   "electrical",
@@ -43,13 +27,22 @@ export type Triage = {
   title: string;
   hazard_flags: string[];
   access_impact: string[];
+  /** Authority id from lib/categories.ts AUTHORITIES. */
   routed_to: string | null;
+  /** Other authorities copied on the report. */
+  cc: string[];
+  /** Plain description of what the vision model sees in the photo. */
+  identified: string;
+  routing_reason: string;
+  /** The report sent to the authority. Location and time are appended on save. */
+  report_subject: string;
+  report_body: string;
   contains_sensitive: boolean;
   color: string | null;
   brand: string | null;
   marks: string | null;
   /** Which backend produced this triage. Not stored. */
-  source?: "eaiser" | "openai" | "gemini" | "mock";
+  source?: "claude" | "mock";
 };
 
 export type Report = {
@@ -70,6 +63,11 @@ export type Report = {
   hazard_flags: string[];
   access_impact: string[];
   routed_to: string | null;
+  cc: string[];
+  identified: string | null;
+  routing_reason: string | null;
+  report_subject: string | null;
+  report_body: string | null;
   contains_sensitive: boolean;
   status: string;
   created_at: string;

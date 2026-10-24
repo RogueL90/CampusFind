@@ -11,8 +11,8 @@ export default function Home() {
           <span className="text-cyan-300">Fixed or found.</span>
         </h1>
         <p className="mt-2 text-white/70">
-          Report a campus problem or a lost item in under 30 seconds. EAiSER routes it to the right team, and we match
-          lost and found items by photo.
+          Snap a photo and drop a pin. AI works out what it is, sends a written report to the right campus team, and
+          matches lost and found items by photo.
         </p>
       </div>
       <Link
@@ -21,9 +21,14 @@ export default function Home() {
       >
         + New report
       </Link>
-      <Link href="/inbox" className="block rounded-2xl border border-white/15 bg-white/5 py-4 text-center">
-        Inbox
-      </Link>
+      <div className="grid grid-cols-2 gap-3">
+        <Link href="/inbox" className="rounded-2xl border border-white/15 bg-white/5 py-4 text-center">
+          Inbox
+        </Link>
+        <Link href="/authorities" className="rounded-2xl border border-white/15 bg-white/5 py-4 text-center">
+          Staff view
+        </Link>
+      </div>
     </div>
   );
 }
