@@ -9,8 +9,8 @@ const SCREENS = [
 
 export default function StaffPage() {
   return (
-    <PageShell title="Staff">
-      <p className="mb-4 text-xs text-slate-400">Staff tools for the demo. Switch to the matching user in the top right.</p>
+    <PageShell title="Staff" staffOnly>
+      <p className="mb-4 text-xs text-slate-400">Staff tools for the demo. Proof review needs the Moderator account.</p>
       <ul className="space-y-3">
         {SCREENS.map((s) => (
           <li key={s.href}>

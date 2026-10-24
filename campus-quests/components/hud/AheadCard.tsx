@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
+import { CheckButtons, Freshness } from "@/components/ReportChecks";
 import { ACCESS_NEEDS } from "@/lib/geo/campus";
 import type { ObstacleReading } from "@/lib/geo/obstacles";
 import { formatDistance } from "./CompassStrip";
@@ -11,17 +12,15 @@ export default function AheadCard({
   alerting,
   onShowDetour,
   onDismiss,
-  onAnswerStillBlocked,
+  onChecked,
 }: {
   ahead: ObstacleReading | null;
   nearest: ObstacleReading | null;
   alerting: boolean;
   onShowDetour: (id: string) => void;
   onDismiss: (id: string) => void;
-  onAnswerStillBlocked: (id: string, stillBlocked: boolean) => void;
+  onChecked: (stillThere: boolean) => void;
 }) {
-  const [answered, setAnswered] = useState<string | null>(null);
-
   if (!ahead) {
     return (
       <div className="hud-panel mx-auto flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-xs text-emerald-200">
@@ -55,6 +54,7 @@ export default function AheadCard({
           <div className="mt-0.5 text-[11px] text-slate-300">
             {blocks ? "Blocks the route" : "Use caution"} for {affects.join(", ")}
           </div>
+          <Freshness report={obstacle.report} className="mt-0.5" />
         </div>
       </div>
       {obstacle.alert.detour_text && (
@@ -69,25 +69,7 @@ export default function AheadCard({
             Show detour
           </button>
         )}
-        {answered === obstacle.report.id ? (
-          <span className="text-[11px] text-emerald-300">Thanks, that keeps the map accurate.</span>
-        ) : (
-          <div className="flex items-center gap-1 text-[11px] text-slate-300">
-            Still blocked?
-            {[true, false].map((yes) => (
-              <button
-                key={String(yes)}
-                onClick={() => {
-                  setAnswered(obstacle.report.id);
-                  onAnswerStillBlocked(obstacle.report.id, yes);
-                }}
-                className="rounded-md border border-slate-500/50 px-2 py-1 text-slate-100"
-              >
-                {yes ? "Yes" : "No"}
-              </button>
-            ))}
-          </div>
-        )}
+        <CheckButtons key={obstacle.report.id} reportId={obstacle.report.id} compact onChecked={onChecked} />
         <button onClick={() => onDismiss(obstacle.report.id)} className="ml-auto text-[11px] text-slate-400 underline" aria-label="Dismiss alert">
           Dismiss
         </button>

@@ -51,6 +51,7 @@ export const AUTHORITY_IDS = Object.keys(AUTHORITIES) as AuthorityId[];
 /** Triage categories Claude picks from. `map` is the filter chip and beacon color it shows under. */
 export const ISSUE_CATEGORIES = {
   pothole: { label: "Pothole", icon: "⚠️", authority: "parking", map: "paths" },
+  construction: { label: "Construction zone", icon: "🚧", authority: "fdo_maintenance", map: "paths" },
   garbage: { label: "Garbage", icon: "🗑️", authority: "fdo_custodial", map: "waste" },
   broken_streetlight: { label: "Broken streetlight", icon: "💡", authority: "fdo_maintenance", map: "paths" },
   road_damage: { label: "Road damage", icon: "🚧", authority: "parking", map: "paths" },

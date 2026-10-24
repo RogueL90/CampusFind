@@ -3,7 +3,6 @@
 import { useState } from "react";
 import PageShell, { Empty, ErrorNote } from "@/components/PageShell";
 import Photo from "@/components/Photo";
-import StaffNotice from "@/components/StaffNotice";
 import { getPendingProofs, overrideFixPath, reviewProof, subscribeReports } from "@/lib/data";
 import { timeAgo } from "@/lib/status";
 import type { FixPath, ProofForReview } from "@/lib/types";
@@ -33,8 +32,7 @@ export default function ModeratorPage() {
   }
 
   return (
-    <PageShell title="Proof review" back="/staff">
-      <StaffNotice roles={["moderator"]} />
+    <PageShell title="Proof review" back="/staff" staffOnly={["moderator"]}>
       <p className="mb-4 text-xs text-slate-400">
         Approving moves the helper&apos;s pending points to spendable. Rejecting reverses them and reopens the mission.
       </p>

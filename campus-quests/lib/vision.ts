@@ -19,11 +19,11 @@ import {
 } from "./categories";
 import { HAZARD_FLAGS, type ReportKind, type Triage } from "./types";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
+export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
 const ACCESS_NEEDS = ["wheelchair", "low_vision", "no_stairs", "crutches"] as const;
 
 let client: Anthropic | null = null;
-function claude(): Anthropic | null {
+export function claude(): Anthropic | null {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   client ??= new Anthropic();
   return client;
@@ -31,10 +31,15 @@ function claude(): Anthropic | null {
 
 // ---------- triage ----------
 
+const REPORT_KINDS = ["issue", "lost", "found"] as const;
+
 const TriageSchema = z.object({
+  report_kind: z.enum(REPORT_KINDS).describe("issue = campus problem; found = an item the student just came across; lost = an item the student is missing."),
   identified: z.string().describe("What is actually visible in the photo, in 1-3 plain sentences."),
   category: z.enum([...ISSUE_CATEGORY_IDS, "lost_found"]),
-  issue_type: z.string().describe("Short snake_case subtype, or the item type for lost/found (e.g. airpods_case)."),
+  issue_type: z
+    .string()
+    .describe("Short snake_case subtype, or the item type for lost/found (e.g. airpods_case). For construction it starts with construction_ (e.g. construction_fence)."),
   severity: z.number().describe("1 (cosmetic) to 5 (immediate danger or blocks access)."),
   title: z.string().describe("Under 60 characters."),
   hazard_flags: z.array(z.enum(HAZARD_FLAGS)),
@@ -51,7 +56,13 @@ const TriageSchema = z.object({
 });
 
 // Frozen so it caches across requests; per-report details go in the user message.
-const TRIAGE_SYSTEM = `You are the triage desk for San José State University's campus reporting app. Students send one photo (and sometimes a short note) of a campus problem, or of a personal item they lost or found. You look at the photo, decide what it shows, route it to the right campus authority, and write the report that authority will receive.
+const TRIAGE_SYSTEM = `You are the triage desk for San José State University's campus reporting app. Students send one photo (and sometimes a short note) of a campus problem, or of a personal item they lost or found. They don't say which: you look at the photo, decide what kind of report it is and what it shows, route it to the right campus authority, and write the report that authority will receive.
+
+Report kind (report_kind):
+- issue: the photo shows a problem with the campus itself: construction, potholes, damaged sidewalks, fallen trees, leaks, trash, broken fixtures, blocked ramps, pests, weak Wi-Fi and so on.
+- found: the main subject is a personal belonging (bag, phone, keys, ID, bottle, earbuds, laptop, clothing) that looks left behind: lying on a table, bench, floor or seat, photographed where it sits. A photo taken just now with the camera points to found.
+- lost: the student is missing the item: the note says lost, missing, can't find or "my ...", or the image is a product or catalog photo, a screenshot, or an older personal photo picked from the gallery rather than the item sitting somewhere on campus.
+- When the note and the photo disagree, the note wins. When it's truly unclear whether an item is lost or found, choose found.
 
 Issue categories (pick the closest; use "other" only when nothing fits):
 ${ISSUE_CATEGORY_IDS.map((id) => `- ${id}: ${ISSUE_CATEGORIES[id].label}`).join("\n")}
@@ -68,6 +79,7 @@ Routing rules:
 - Streets and traffic signals the city owns go to city_sj; campus roads, garages and signs go to parking.
 - Inside or right next to a residence hall, add housing to cc.
 - Blocked ramps, broken elevators and stuck automatic doors use accessibility_barrier, with everyone it blocks in access_impact.
+- Fences, barricades or work crews closing a walkway, road or entrance use construction, with everyone it blocks in access_impact. Potholes, damaged sidewalks and fallen trees on a path also list who they block.
 
 Fields:
 - identified: describe what you actually see. If the photo doesn't show the problem the note describes, say so and rely on the note.
@@ -92,14 +104,21 @@ function imageSource(image: string): ImageSource | null {
   return m ? { type: "base64", media_type: m[1] as "image/jpeg", data: m[2] } : null;
 }
 
-async function claudeTriage(image: string | null, note: string | null, kind: ReportKind) {
+/** `kind` is set only when the student corrected the AI's guess; `source` is how the photo was picked. */
+export type TriageHint = { kind?: ReportKind | null; source?: "camera" | "gallery" | null };
+
+async function claudeTriage(image: string | null, note: string | null, hint: TriageHint) {
   const c = claude();
   if (!c) throw new Error("ANTHROPIC_API_KEY not set");
   const src = image ? imageSource(image) : null;
-  const intro =
-    kind === "issue"
-      ? "Report kind: campus issue."
-      : `Report kind: ${kind} personal item (category must be lost_found, routed_to lost_found).`;
+  const intro = [
+    hint.kind
+      ? `The student says this is ${hint.kind === "issue" ? "a campus issue" : `an item they ${hint.kind}`}: use report_kind "${hint.kind}".`
+      : "Decide report_kind yourself.",
+    hint.source === "camera" ? "The photo was taken just now with the camera." : hint.source === "gallery" ? "The photo was picked from the gallery." : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const response = await c.beta.messages.parse({
     model: MODEL,
@@ -127,7 +146,8 @@ async function claudeTriage(image: string | null, note: string | null, kind: Rep
 }
 
 /** Coerce a triage (from Claude or the mock) into a valid, consistent shape. */
-export function normalizeTriage(raw: Partial<z.infer<typeof TriageSchema>>, kind: ReportKind, source: Triage["source"]): Triage {
+export function normalizeTriage(raw: Partial<z.infer<typeof TriageSchema>>, forced: ReportKind | null, source: Triage["source"]): Triage {
+  const kind: ReportKind = forced ?? (REPORT_KINDS.includes(raw.report_kind as ReportKind) ? (raw.report_kind as ReportKind) : raw.category === "lost_found" ? "found" : "issue");
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
   const isItem = kind !== "issue";
   const category: TriageCategory = isItem
@@ -142,6 +162,7 @@ export function normalizeTriage(raw: Partial<z.infer<typeof TriageSchema>>, kind
   const identified = str(raw.identified) ?? "";
 
   return {
+    kind,
     category,
     issue_type: (str(raw.issue_type) ?? (isItem ? "unknown_item" : category)).toLowerCase().replace(/[^a-z0-9]+/g, "_"),
     severity: isItem ? 1 : Number.isFinite(sev) ? Math.min(5, Math.max(1, sev)) : 3,
@@ -160,6 +181,17 @@ export function normalizeTriage(raw: Partial<z.infer<typeof TriageSchema>>, kind
     marks: isItem ? str(raw.marks) : null,
     source,
   };
+}
+
+const ITEM_WORDS = ["airpod", "earbud", "headphone", "bottle", "hydro", "wallet", "phone", "keys?", "laptop", "macbook", "backpack", "bag", "id", "card", "umbrella", "jacket", "charger", "calculator", "glasses"];
+
+/** Offline stand-in for Claude's report_kind: lost words win, then item words mean found, else an issue. */
+export function guessKind(note: string | null, source?: TriageHint["source"]): ReportKind {
+  const n = (note ?? "").toLowerCase();
+  const has = (...w: string[]) => w.some((x) => new RegExp(`\\b${x}s?\\b`).test(n));
+  if (has("lost", "missing", "can'?t find", "cannot find", "left my", "my")) return "lost";
+  if (has(...ITEM_WORDS)) return source === "gallery" && !has("found", "someone left") ? "lost" : "found";
+  return "issue";
 }
 
 /** Keyword guesses from the note so the demo works offline. Students edit anything that's off. */
@@ -184,6 +216,7 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
               : { issue_type: "unknown_item", brand: null, label: "item" };
     const desc = `${color ? `${color} ` : ""}${type.label}`;
     return {
+      report_kind: kind,
       issue_type: type.issue_type,
       title: `${kind === "lost" ? "Lost" : "Found"}: ${desc}`,
       identified: `A ${desc}.`,
@@ -206,6 +239,7 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
   ): Partial<z.infer<typeof TriageSchema>> => {
     const label = ISSUE_CATEGORIES[category].label;
     return {
+      report_kind: "issue",
       category,
       issue_type: category,
       severity,
@@ -218,6 +252,8 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
     };
   };
 
+  if (has("construction", "barricade", "fence", "fenced", "road work", "roadwork", "closed off"))
+    return pick("construction", 4, { hazard_flags: ["restricted_area"], access_impact: ["wheelchair", "low_vision", "crutches"] });
   if (has("wifi", "wi-fi", "internet", "network", "eduroam")) return pick("weak_wifi", 2);
   if (has("filler", "fountain")) return pick("bottle_filler", 1);
   if (has("ramp", "elevator", "automatic door", "door button"))
@@ -229,7 +265,7 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
   if (has("graffiti")) return pick("graffiti", 2);
   if (has("noise", "loud")) return pick("noise_complaint", 2);
   if (has("sidewalk")) return pick("damaged_sidewalk", 3, { access_impact: ["wheelchair", "crutches"] });
-  if (has("tree")) return pick("fallen_tree", 4, { cc: ["upd"] });
+  if (has("tree", "branch")) return pick("fallen_tree", 4, { cc: ["upd"], access_impact: ["wheelchair", "crutches"] });
   if (has("drain")) return pick("clogged_drain", 3);
   if (has("flood")) return pick("flooding", 4, { cc: ["ehs"] });
   if (has("leak", "water")) return pick("water_leakage", 3);
@@ -244,15 +280,16 @@ export function mockTriage(note: string | null, kind: ReportKind): Partial<z.inf
 }
 
 /** The one entry point for /api/triage. `image` is a public URL or a data URL. */
-export async function triagePhoto(image: string | null, note: string | null, kind: ReportKind): Promise<Triage> {
+export async function triagePhoto(image: string | null, note: string | null, hint: TriageHint = {}): Promise<Triage> {
+  const forced = hint.kind ?? null;
   if (claude() && (image || note)) {
     try {
-      return normalizeTriage(await claudeTriage(image, note, kind), kind, "claude");
+      return normalizeTriage(await claudeTriage(image, note, hint), forced, "claude");
     } catch (e) {
       console.warn("[triage] Claude failed, using mock:", (e as Error).message);
     }
   }
-  return normalizeTriage(mockTriage(note, kind), kind, "mock");
+  return normalizeTriage(mockTriage(note, forced ?? guessKind(note, hint.source)), forced, "mock");
 }
 
 // ---------- photo similarity ----------

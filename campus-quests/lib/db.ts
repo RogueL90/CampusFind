@@ -75,6 +75,7 @@ function toReport(row: ReportRow): Report {
   return {
     ...report,
     cc: report.cc ?? [],
+    resolved_votes: report.resolved_votes ?? 0,
     mission: mission_id
       ? {
           id: mission_id,
@@ -142,7 +143,7 @@ function subscribeTables(tables: string[], onChange: () => void, filter?: string
 
 /** Fires when any pin, mission, vote, item or obstacle changes. Call getReports() again in the callback. */
 export function subscribeReports(onChange: () => void): () => void {
-  return subscribeTables(["reports", "missions", "report_votes", "items", "access_alerts", "matches"], onChange);
+  return subscribeTables(["reports", "missions", "report_votes", "report_checks", "items", "access_alerts", "matches"], onChange);
 }
 
 export async function getAccessAlerts(): Promise<AccessAlert[]> {
@@ -160,6 +161,11 @@ export async function createReport(input: NewReport): Promise<Report> {
 
 export async function voteMeToo(reportId: string): Promise<void> {
   unwrap(await supabase().rpc("vote_me_too", { p_report: reportId, p_user: getCurrentUserId() }));
+}
+
+/** "Still there" (also a Me too) or "Looks resolved"; 3 resolved checks after the last "still there" resolve it. */
+export async function checkReport(reportId: string, stillThere: boolean): Promise<void> {
+  unwrap(await supabase().rpc("check_report", { p_report: reportId, p_user: getCurrentUserId(), p_still: stillThere }));
 }
 
 export async function claimMission(missionId: string): Promise<Mission> {

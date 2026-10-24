@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import Countdown from "@/components/Countdown";
 import FinderCard from "@/components/FinderCard";
 import Photo from "@/components/Photo";
+import { CheckButtons, Freshness } from "@/components/ReportChecks";
 import ProofCapture from "@/components/ProofCapture";
 import { authorityName } from "@/lib/categories";
 import { userName } from "@/lib/currentUser";
@@ -80,20 +80,25 @@ export default function ReportSheet({ report, onClose }: { report: Report; onClo
           {report.kind === "issue" && report.routed_to && <span>Sent to {authorityName(report.routed_to)}</span>}
           {report.kind === "issue" && <span>{report.votes} × me too</span>}
         </div>
+        {report.kind === "issue" && <Freshness report={report} className="mt-1" />}
+        {report.kind === "issue" && !["resolved", "verified", "closed"].includes(report.status) && (
+          <div className="mt-2">
+            <CheckButtons key={report.id} reportId={report.id} />
+          </div>
+        )}
 
         {report.kind === "lost" && report.item && (
           <p className="mt-2 text-xs text-amber-100">
             Lost somewhere within {report.item.radius_m} m
             {[report.item.color, report.item.brand].filter(Boolean).length > 0 && ` · ${[report.item.color, report.item.brand].filter(Boolean).join(", ")}`}
-            {mine ? ". We'll ping you when a found item matches." : ". Spot it? Report it as found."}
+            {mine ? ". Only staff can see this. We'll ping you when a found item matches." : ". Visible to staff and the owner only."}
           </p>
         )}
         {report.kind === "found" && !mine && (
           <p className="mt-2 text-xs text-slate-300">
             {report.item?.whereabouts === "at_office"
               ? "Waiting at the Lost & Found office."
-              : `${userName(report.reporter_id)} found this and is bringing it to Lost & Found.`}{" "}
-            Yours? Report it lost and we&apos;ll match it.
+              : `${userName(report.reporter_id)} found this and is bringing it to Lost & Found.`}
           </p>
         )}
         {showFinderCard && (
@@ -161,11 +166,6 @@ export default function ReportSheet({ report, onClose }: { report: Report; onClo
             >
               {voted ? "✓ Me too" : "Me too"}
             </button>
-          )}
-          {report.kind === "found" && !mine && (
-            <Link href="/report?kind=lost" className="rounded-lg border border-slate-500/60 px-3 py-2 text-xs text-white">
-              It&apos;s mine
-            </Link>
           )}
         </div>
       </div>

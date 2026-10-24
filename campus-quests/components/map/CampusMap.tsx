@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Map as MapLibreMap, Marker, type GeoJSONSource, type MapLayerMouseEvent } from "maplibre-gl";
+import { LngLatBounds, Map as MapLibreMap, Marker, type GeoJSONSource, type MapLayerMouseEvent } from "maplibre-gl";
+import type { LineString } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { DEFAULT_CAMERA, MAP_STYLE_URL, OBSTACLE_COLORS, type LngLat } from "@/lib/geo/campus";
 import { buildMapLayers, type Obstacle } from "@/lib/geo/obstacles";
@@ -28,14 +29,18 @@ export interface CampusMapProps {
   flat: boolean;
   reducedMotion: boolean;
   cameraTarget: CameraTarget | null;
+  /** Navigation route, drawn in cyan with a destination marker; the camera fits it when it changes. */
+  route: { path: LineString; label: string } | null;
   onReportClick: (reportId: string) => void;
   onBearingChange: (bearing: number) => void;
   onUserPan: () => void;
 }
 
-const SOURCES = ["cq-lost", "cq-blocked", "cq-detours", "cq-rings", "cq-beacon-glow", "cq-beacons", "cq-volumes"] as const;
+const SOURCES = ["cq-route", "cq-lost", "cq-blocked", "cq-detours", "cq-rings", "cq-beacon-glow", "cq-beacons", "cq-volumes"] as const;
 const CLICKABLE = ["cq-beacons", "cq-volumes", "cq-volumes-active", "cq-lost-fill"];
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
+
+const ROUTE_COLOR = "#22d3ee";
 
 const DASH_STEPS = [
   [0, 4, 3],
@@ -57,6 +62,20 @@ const DASH_STEPS = [
 function addHudLayers(map: MapLibreMap) {
   for (const id of SOURCES) map.addSource(id, { type: "geojson", data: EMPTY });
 
+  map.addLayer({
+    id: "cq-route-glow",
+    type: "line",
+    source: "cq-route",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": ROUTE_COLOR, "line-width": 16, "line-blur": 10, "line-opacity": 0.35 },
+  });
+  map.addLayer({
+    id: "cq-route",
+    type: "line",
+    source: "cq-route",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": ROUTE_COLOR, "line-width": 6, "line-opacity": 0.95 },
+  });
   map.addLayer({
     id: "cq-lost-fill",
     type: "fill",
@@ -181,6 +200,19 @@ function makeTag(o: Obstacle, onClick: () => void) {
   return el;
 }
 
+function makeDestination(label: string) {
+  const el = document.createElement("div");
+  el.className = "hud-dest";
+  const icon = document.createElement("span");
+  icon.textContent = "🏁";
+  icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = label;
+  el.append(icon, text);
+  el.setAttribute("aria-label", `Destination: ${label}`);
+  return el;
+}
+
 function makeBadge(r: Report, onClick: () => void) {
   const el = document.createElement("button");
   el.className = "hud-badge";
@@ -246,7 +278,9 @@ export default function CampusMap(props: CampusMapProps) {
       .addTo(map);
 
     const markers = markersRef.current;
+    // Next keeps hidden routes' state (Activity), so a remount would otherwise see ready=true before the new map loads.
     return () => {
+      setReady(false);
       markers.clear();
       map.remove();
       mapRef.current = null;
@@ -257,7 +291,7 @@ export default function CampusMap(props: CampusMapProps) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !ready) return;
+    if (!map || !ready || !map.getSource("cq-lost")) return;
     const data = buildMapLayers(reports, obstacles, hiddenCategories, activeObstacleId, focusedObstacleId);
     (map.getSource("cq-lost") as GeoJSONSource).setData(data.lostAreas);
     (map.getSource("cq-blocked") as GeoJSONSource).setData(data.blocked);
@@ -317,6 +351,29 @@ export default function CampusMap(props: CampusMapProps) {
     if (flat) map.dragRotate.disable();
     else map.dragRotate.enable();
   }, [flat, ready]);
+
+  const { route } = props;
+  const destRef = useRef<Marker | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !map.getSource("cq-route")) return;
+    (map.getSource("cq-route") as GeoJSONSource).setData(route ? { type: "Feature", properties: {}, geometry: route.path } : EMPTY);
+    destRef.current?.remove();
+    destRef.current = null;
+    if (!route) return;
+    const coords = route.path.coordinates;
+    destRef.current = new Marker({ element: makeDestination(route.label), anchor: "bottom", offset: [0, -6] })
+      .setLngLat(coords[coords.length - 1] as LngLat)
+      .addTo(map);
+    if (propsRef.current.follow) return;
+    const bounds = coords.reduce((b, c) => b.extend(c as LngLat), new LngLatBounds(coords[0] as LngLat, coords[0] as LngLat));
+    map.fitBounds(bounds, {
+      padding: { top: 150, bottom: Math.min(380, map.getContainer().clientHeight * 0.45), left: 40, right: 80 },
+      maxZoom: 18,
+      pitch: propsRef.current.flat ? 0 : 45,
+      duration: propsRef.current.reducedMotion ? 0 : 1200,
+    });
+  }, [route, ready]);
 
   const { cameraTarget } = props;
   useEffect(() => {

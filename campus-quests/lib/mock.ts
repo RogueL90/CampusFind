@@ -37,7 +37,7 @@ const lcfirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 // State
 // ---------------------------------------------------------------------------
 
-type ReportRow = Omit<Report, "votes" | "mission" | "item">;
+type ReportRow = Omit<Report, "votes" | "mission" | "item" | "last_checked_at" | "last_check_still" | "resolved_votes">;
 type ItemRow = ItemDetails & { report_id: string; checkin_code: string | null };
 type AlertRow = Omit<AccessAlert, "title" | "category" | "status" | "building" | "floor" | "lat" | "lng" | "footprint">;
 type ProofRow = {
@@ -56,6 +56,7 @@ const reports: ReportRow[] = [];
 const missions: Mission[] = [];
 const items = new Map<string, ItemRow>();
 const voters = new Map<string, Set<string>>();
+const checks: { report_id: string; user_id: string; still_there: boolean; at: string }[] = [];
 const alerts: AlertRow[] = [];
 const matches: Match[] = [];
 const proofs: ProofRow[] = [];
@@ -108,9 +109,15 @@ function toReport(r: ReportRow): Report {
     .filter((x) => x.report_id === r.id && ["open", "claimed", "submitted"].includes(x.status))
     .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
   const item = items.get(r.id);
+  const mine = checks.filter((c) => c.report_id === r.id);
+  const last = mine.at(-1) ?? null;
+  const lastStill = mine.findLast((c) => c.still_there);
   return {
     ...r,
     votes: voters.get(r.id)?.size ?? 0,
+    last_checked_at: last?.at ?? null,
+    last_check_still: last?.still_there ?? null,
+    resolved_votes: new Set(mine.filter((c) => !c.still_there && (!lastStill || c.at > lastStill.at)).map((c) => c.user_id)).size,
     mission: m ? liveMission(m) : null,
     item: item
       ? {
@@ -183,7 +190,7 @@ function genCode(): string {
 }
 
 const obstacleStyleFor = (issueType: string | null): AlertRow["obstacle_style"] =>
-  /elevator/.test(issueType ?? "") ? "elevator" : "pothole";
+  /elevator/.test(issueType ?? "") ? "elevator" : /construction|barricade|fence|road_?work/.test(issueType ?? "") ? "zone" : "pothole";
 
 // ---------------------------------------------------------------------------
 // Seed (mirrors supabase/seed.sql: same users, rewards, obstacles and demo story)
@@ -308,6 +315,21 @@ seed({
   minutes: 60 * 5,
 });
 seed({
+  id: "r-mq-door",
+  reporter_id: MAYA,
+  category: "accessibility",
+  issue_type: "door_blocked",
+  title: "North doors chained shut, MacQuarrie Hall",
+  description: "Accessible north entrance on Paseo de San Carlos is chained; the automatic opener is off.",
+  severity: 4,
+  at: G.macquarrieDoor.center,
+  building: "MacQuarrie Hall",
+  floor: "1",
+  access_impact: ["wheelchair", "crutches", "no_stairs"],
+  votes: 3,
+  minutes: 35,
+});
+seed({
   id: "r-wsq-scaffold",
   category: "paths",
   issue_type: "scaffolding",
@@ -340,7 +362,7 @@ seed({
   issue_type: "bottle_filler",
   title: "Bottle filler red light, Student Union 2nd floor",
   severity: 1,
-  at: [-121.88095, 37.33652],
+  at: [-121.88005, 37.33672],
   building: "Student Union",
   floor: "2",
   fix_path: "self_fixable",
@@ -485,6 +507,19 @@ alerts.push(
     confirmed: true,
   },
   {
+    id: "aa-mq-door",
+    report_id: "r-mq-door",
+    affects: ["wheelchair", "crutches", "no_stairs"],
+    obstacle_style: "barrier",
+    impact: "blocks",
+    label: "North doors closed",
+    detour_text: "Use the south entrance on the 7th Street side. It was checked step-free 25 min ago.",
+    detour_path: null,
+    blocked_path: G.macquarrieDoor.blockedPath,
+    est_delay_min: 1,
+    confirmed: true,
+  },
+  {
     id: "aa-scaffold",
     report_id: "r-wsq-scaffold",
     affects: ["low_vision"],
@@ -499,6 +534,13 @@ alerts.push(
   },
 );
 
+checks.push(
+  { report_id: "r-clark-construction", user_id: AVA, still_there: true, at: minutesAgo(180) },
+  { report_id: "r-paseo-pothole", user_id: "s-1", still_there: false, at: minutesAgo(40) },
+  { report_id: "r-union-ramp", user_id: LEO, still_there: true, at: minutesAgo(12) },
+  { report_id: "r-mq-door", user_id: AVA, still_there: true, at: minutesAgo(8) },
+);
+
 // Leo starts at 60 spendable, so one +50 return takes him past the 100-point $5 credit.
 ledger.push(
   { id: "l-1", user_id: LEO, delta: 50, reason: "return_checkin", mission_id: null, report_id: null, state: "spendable", created_at: minutesAgo(60 * 24 * 6) },
@@ -508,7 +550,7 @@ ledger.push(
 );
 
 notifications.push(
-  { id: "n-1", user_id: MAYA, text: "Search mission posted for your black AirPods case. Helpers near MLK Library can see it.", link: "/?report=r-lost-airpods", read: false, created_at: minutesAgo(120) },
+  { id: "n-1", user_id: MAYA, text: "Your black AirPods case report is with Lost & Found. Only you and staff can see it.", link: "/?report=r-lost-airpods", read: false, created_at: minutesAgo(120) },
   { id: "n-2", user_id: LEO, text: "+10 points approved: accessibility check at the Student Union.", link: "/missions", read: true, created_at: minutesAgo(60 * 24 * 4) },
 );
 
@@ -577,6 +619,7 @@ export async function createReport(input: NewReport): Promise<Report> {
   }
 
   const fix: FixPath = input.fix_path ?? (input.kind === "issue" ? "staff" : "lost_found");
+  const style = obstacleStyleFor(input.issue_type ?? null);
   const row: ReportRow = {
     id: nextId("r"),
     reporter_id: reporter,
@@ -589,7 +632,8 @@ export async function createReport(input: NewReport): Promise<Report> {
     photo_urls: input.photo_urls ?? [],
     lat: input.lat,
     lng: input.lng,
-    footprint: null,
+    // Zones need an area to stand up in 3D; a student pin gets a small one around it.
+    footprint: input.kind === "issue" && style === "zone" ? turf.circle(at, 12, { units: "meters", steps: 10 }).geometry : null,
     building: input.building ?? null,
     floor: input.floor ?? null,
     fix_path: fix,
@@ -644,7 +688,7 @@ export async function createReport(input: NewReport): Promise<Report> {
       id: nextId("aa"),
       report_id: row.id,
       affects: row.access_impact as AccessAlert["affects"],
-      obstacle_style: obstacleStyleFor(row.issue_type),
+      obstacle_style: style,
       impact: (row.severity ?? 0) >= 4 ? "blocks" : "caution",
       label: row.title,
       detour_text: null,
@@ -664,6 +708,23 @@ export async function voteMeToo(reportId: string): Promise<void> {
   set.add(getCurrentUserId());
   voters.set(reportId, set);
   if (set.size >= 3) for (const a of alerts) if (a.report_id === reportId) a.confirmed = true;
+  emit();
+}
+
+export async function checkReport(reportId: string, stillThere: boolean): Promise<void> {
+  const r = reportRow(reportId);
+  const userId = getCurrentUserId();
+  checks.push({ report_id: reportId, user_id: userId, still_there: stillThere, at: nowIso() });
+  if (stillThere) {
+    const set = voters.get(reportId) ?? new Set<string>();
+    if (userId !== r.reporter_id) set.add(userId);
+    voters.set(reportId, set);
+    if (set.size >= 3) for (const a of alerts) if (a.report_id === reportId) a.confirmed = true;
+  } else if (toReport(r).resolved_votes >= 3 && r.kind === "issue") {
+    setStatus(reportId, "resolved", null);
+    for (const m of missions) if (m.report_id === reportId && ["open", "claimed"].includes(m.status)) m.status = "cancelled";
+    if (r.reporter_id) notify(r.reporter_id, `Students say "${r.title}" looks resolved. It's off the map now.`, `/?report=${reportId}`);
+  }
   emit();
 }
 

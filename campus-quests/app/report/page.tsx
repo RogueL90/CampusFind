@@ -1,11 +1,10 @@
 "use client";
 
-// Report flow: snap a photo, drop a pin, and Claude does the rest (what it is, who handles it,
-// and the written report). The student just checks it and taps Send.
+// Report flow: snap a photo, drop a pin, and Claude does the rest (problem, lost or found item,
+// who handles it, and the written report). The student just checks it and taps Send.
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { MatchScore } from "@/app/api/match/route";
 import FinderCard from "@/components/FinderCard";
 import PageShell from "@/components/PageShell";
@@ -13,7 +12,7 @@ import PinPicker, { type PinValue } from "@/components/map/PinPicker";
 import { AUTHORITIES, AUTHORITY_IDS, authorityName, ISSUE_CATEGORIES, ISSUE_CATEGORY_IDS, mapCategory } from "@/lib/categories";
 import { createMatch, createReport, getCheckinCode, getOpenLostReports, uploadPhoto } from "@/lib/data";
 import { fixPath } from "@/lib/fixPath";
-import { nearestBuilding } from "@/lib/geo/buildings";
+import { nearestBuilding } from "@/lib/geo/places";
 import { MATCH_THRESHOLD } from "@/lib/matchScore";
 import { reportFooter } from "@/lib/reportFooter";
 import { resizeImage } from "@/lib/resizeImage";
@@ -22,12 +21,9 @@ import { useCurrentUser } from "@/lib/useCurrentUser";
 
 type Step = "photo" | "pin" | "confirm" | "done";
 type Saved = { report: Report; matched: number; code: string | null };
+type PhotoSource = "camera" | "gallery" | null;
 
-const KINDS: { kind: ReportKind; label: string }[] = [
-  { kind: "issue", label: "Problem" },
-  { kind: "lost", label: "Lost item" },
-  { kind: "found", label: "Found item" },
-];
+const KIND_LABEL: Record<ReportKind, string> = { issue: "Campus problem", lost: "Lost item", found: "Found item" };
 
 const ACCESS = ["wheelchair", "low_vision", "no_stairs", "crutches"];
 
@@ -65,11 +61,12 @@ const blobToDataUrl = (blob: Blob) =>
     reader.readAsDataURL(blob);
   });
 
-async function requestTriage(photo: string | null, note: string, kind: ReportKind): Promise<Triage> {
+/** `kind` is only sent when the student corrects the AI; otherwise Claude decides. */
+async function requestTriage(photo: string | null, note: string, source: PhotoSource, kind: ReportKind | null): Promise<Triage> {
   const res = await fetch("/api/triage", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ photo, note, kind }),
+    body: JSON.stringify({ photo, note, source, kind }),
   });
   if (!res.ok) throw new Error("Couldn't read the photo");
   return res.json();
@@ -104,18 +101,14 @@ const field = "mt-1 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-
 export default function ReportPage() {
   return (
     <PageShell title="Report">
-      <Suspense fallback={null}>
-        <ReportFlow />
-      </Suspense>
+      <ReportFlow />
     </PageShell>
   );
 }
 
 function ReportFlow() {
   const user = useCurrentUser();
-  const initialKind = useSearchParams().get("kind");
   const [step, setStep] = useState<Step>("photo");
-  const [kind, setKind] = useState<ReportKind>(initialKind === "lost" || initialKind === "found" ? initialKind : "issue");
   const [preview, setPreview] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -133,9 +126,11 @@ function ReportFlow() {
   const [elapsed, setElapsed] = useState(0);
   const startedAt = useRef(0);
   const dataUrl = useRef<string | null>(null);
+  const source = useRef<PhotoSource>(null);
   const triagePromise = useRef<Promise<Triage | null> | null>(null);
 
-  const isItem = kind !== "issue";
+  const kind = triage?.kind ?? null;
+  const isItem = kind === "lost" || kind === "found";
 
   function reset() {
     setStep("photo");
@@ -151,14 +146,15 @@ function ReportFlow() {
     setSaved(null);
     setError(null);
     dataUrl.current = null;
+    source.current = null;
     triagePromise.current = null;
   }
 
-  function runTriage(k: ReportKind) {
+  function runTriage(forced: ReportKind | null = null) {
     setTriage(null);
     setTriaging(true);
     setError(null);
-    triagePromise.current = requestTriage(dataUrl.current, note, k)
+    triagePromise.current = requestTriage(dataUrl.current, note, source.current, forced)
       .then((t) => {
         setTriage(t);
         return t;
@@ -171,9 +167,10 @@ function ReportFlow() {
   }
 
   /** Upload and Claude's triage start the moment a photo is picked, so the report is usually ready by the time the pin is placed. */
-  async function onPhoto(file: File | undefined) {
+  async function onPhoto(file: File | undefined, from: PhotoSource) {
     if (!file) return;
     startedAt.current = clock();
+    source.current = from;
     setPreview(URL.createObjectURL(file));
     setPhotoUrl(null);
     setUploading(true);
@@ -181,7 +178,7 @@ function ReportFlow() {
     try {
       const blob = await resizeImage(file);
       dataUrl.current = await blobToDataUrl(blob);
-      runTriage(kind);
+      runTriage();
       uploadPhoto(blob, "reports")
         .then(setPhotoUrl, () => setError("Photo upload failed. You can still send the report without it."))
         .finally(() => setUploading(false));
@@ -195,14 +192,9 @@ function ReportFlow() {
     if (!note.trim()) return;
     startedAt.current = clock();
     dataUrl.current = null;
-    runTriage(kind);
+    source.current = null;
+    runTriage();
     setStep("pin");
-  }
-
-  /** Changing problem/lost/found after the photo re-runs triage with the right framing. */
-  function chooseKind(k: ReportKind) {
-    setKind(k);
-    if (step !== "photo") runTriage(k);
   }
 
   function choosePin(p: PinValue) {
@@ -219,9 +211,10 @@ function ReportFlow() {
     if (!triage || !pin) return;
     setSaving(true);
     setError(null);
+    const t = triage;
+    const kind = t.kind;
     const [lostFrom, lostTo] = kind === "lost" ? windowFor(when) : [null, null];
     const createdAt = new Date().toISOString();
-    const t = triage;
     const input: NewReport = {
       kind,
       category: mapCategory(isItem ? "lost_found" : t.category),
@@ -296,43 +289,29 @@ function ReportFlow() {
         </div>
       )}
 
-      {step !== "done" && (
-        <div className="grid grid-cols-3 gap-1 rounded-xl bg-white/5 p-1 text-sm" role="radiogroup" aria-label="Report type">
-          {KINDS.map((k) => (
-            <button
-              key={k.kind}
-              type="button"
-              role="radio"
-              aria-checked={kind === k.kind}
-              onClick={() => chooseKind(k.kind)}
-              className={`rounded-lg py-2 ${kind === k.kind ? "bg-cyan-400 font-semibold text-slate-950" : "text-slate-300"}`}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
-      )}
-
       {step === "photo" && (
         <section className="space-y-4">
-          <h2 className="text-2xl font-semibold text-white">
-            {kind === "lost" ? "Show us what you lost" : kind === "found" ? "Snap what you found" : "Snap the problem"}
-          </h2>
+          <h2 className="text-2xl font-semibold text-white">Snap it</h2>
           <p className="text-sm text-slate-400">
-            {kind === "lost"
-              ? "Your own photo or a product photo of the same model. AI fills in the details."
-              : "AI figures out what it is, who should fix it, and writes the report."}
+            A problem on campus, something you found, or a photo of something you lost. AI works out which one it is, who handles it, and
+            writes the report.
           </p>
           <label className="grid aspect-[4/3] w-full cursor-pointer place-items-center rounded-2xl border-2 border-dashed border-cyan-400/40 bg-cyan-400/5 text-center">
             <span>
               <span className="block text-5xl">📷</span>
               <span className="mt-2 block font-medium text-cyan-200">Take photo</span>
             </span>
-            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => onPhoto(e.target.files?.[0], "camera")}
+            />
           </label>
           <label className="block cursor-pointer rounded-xl border border-white/15 bg-white/5 py-3 text-center text-sm text-white">
             🖼️ Choose from gallery
-            <input type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0], "gallery")} />
           </label>
           <div className="rounded-xl border border-white/10 p-3">
             <label className="text-xs text-slate-400" htmlFor="report-note">
@@ -344,7 +323,7 @@ function ReportFlow() {
               onChange={(e) => setNote(e.target.value)}
               rows={2}
               maxLength={500}
-              placeholder={kind === "issue" ? "e.g. Wi-Fi keeps dropping on MLK floor 4" : "e.g. Black AirPods Pro case with a sticker"}
+              placeholder="e.g. Fence blocking the path by MLK, or I lost my black AirPods case"
               className={`${field} text-sm`}
             />
             <button type="button" disabled={!note.trim()} onClick={describeInstead} className="mt-2 text-sm text-cyan-300 disabled:text-slate-600">
@@ -362,7 +341,7 @@ function ReportFlow() {
               <img src={preview} alt="Your photo" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
             )}
             <p className="text-sm text-slate-400">
-              {triaging ? "✨ AI is looking at it…" : triage ? "✨ AI report ready" : uploading ? "Uploading…" : ""}
+              {triaging ? "✨ AI is looking at it…" : triage ? `✨ ${KIND_LABEL[triage.kind]}: ${triage.title}` : uploading ? "Uploading…" : ""}
             </p>
           </div>
           <h2 className="text-2xl font-semibold text-white">
@@ -437,7 +416,7 @@ function ReportFlow() {
                 )}
                 <div className="min-w-0">
                   <span className="rounded-full bg-cyan-300/15 px-2 py-0.5 text-xs text-cyan-200">
-                    ✨ {triage.source === "claude" ? "Claude" : "Demo AI"} identified
+                    ✨ {KIND_LABEL[triage.kind]} · {triage.source === "claude" ? "Claude" : "Demo AI"}
                   </span>
                   <input
                     aria-label="Title"
@@ -557,9 +536,23 @@ function ReportFlow() {
                 </div>
               )}
 
-              {!isItem && fixPath({ kind, ...triage }) === "self_fixable" && (
+              {!isItem && fixPath(triage) === "self_fixable" && (
                 <p className="rounded-xl bg-white/5 px-3 py-2 text-sm text-slate-200">🎯 Students can help: this also becomes a mission</p>
               )}
+
+              <p className="text-center text-xs text-slate-500">
+                Not a {KIND_LABEL[triage.kind].toLowerCase()}? It&apos;s a{" "}
+                {(["issue", "lost", "found"] as const)
+                  .filter((k) => k !== triage.kind)
+                  .map((k, i) => (
+                    <span key={k}>
+                      {i > 0 && " or "}
+                      <button type="button" onClick={() => runTriage(k)} className="text-cyan-300 underline-offset-2 hover:underline">
+                        {KIND_LABEL[k].toLowerCase()}
+                      </button>
+                    </span>
+                  ))}
+              </p>
 
               {error && <p className="text-sm text-rose-300">{error}</p>}
               <button
@@ -581,7 +574,7 @@ function ReportFlow() {
             <div className="text-5xl">✅</div>
             <h2 className="mt-2 text-2xl font-semibold text-white">Reported in {elapsed}s</h2>
             <p className="mt-1 text-sm text-slate-300">
-              {kind === "lost" && "It's on the map with a search mission. We'll ping you the moment a found item looks like a match."}
+              {kind === "lost" && "Only you and Lost & Found staff can see it. We'll ping you the moment a found item looks like a match."}
               {kind === "found" &&
                 (saved.matched
                   ? "Good news: it looks like someone lost this. We've let them know."

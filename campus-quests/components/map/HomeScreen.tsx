@@ -4,20 +4,27 @@ import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import * as turf from "@turf/turf";
-import { getAccessAlerts, getReports, subscribeReports, voteMeToo } from "@/lib/data";
-import { CATEGORY_BY_ID, DEFAULT_CAMERA, DEMO_GEOMETRY, type LngLat } from "@/lib/geo/campus";
-import { buildObstacles, findAhead, readObstacles } from "@/lib/geo/obstacles";
+import { getAccessAlerts, getReports, subscribeReports } from "@/lib/data";
+import { CATEGORIES, CATEGORY_BY_ID, DEFAULT_CAMERA, DEMO_GEOMETRY, type LngLat } from "@/lib/geo/campus";
+import { alertSpeech, buildObstacles, findAhead, readObstacles } from "@/lib/geo/obstacles";
+import { currentStep, destinationBarriers, progressAlong, routeToAmenity, routeToBuilding, type Route } from "@/lib/geo/route";
+import type { AmenityType } from "@/lib/geo/places";
+import type { DestinationResult, NeedsResult } from "@/lib/assist";
+import { chime, primeAudio } from "@/lib/chime";
 import { markAlerted, resetAlertMemory, wasAlertedToday } from "@/lib/geo/alertMemory";
 import { useLocalStore } from "@/lib/useLocalStore";
-import type { AccessAlert, Category, Report } from "@/lib/types";
+import type { AccessAlert, AccessNeed, Category, Report } from "@/lib/types";
 import CompassStrip, { type CompassItem } from "@/components/hud/CompassStrip";
 import StatusCorner from "@/components/hud/StatusCorner";
 import AheadCard from "@/components/hud/AheadCard";
 import FilterChips from "@/components/hud/FilterChips";
 import AccessPanel, { DEFAULT_ACCESS_PROFILE } from "@/components/hud/AccessPanel";
+import AskBar, { type AskMode } from "@/components/hud/AskBar";
+import NavCard from "@/components/hud/NavCard";
 import ReportSheet from "@/components/ReportSheet";
 import NotificationBell from "@/components/NotificationBell";
 import UserSwitcher from "@/components/UserSwitcher";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useLocation } from "./useLocation";
 import type { CameraTarget } from "./CampusMap";
 
@@ -40,10 +47,26 @@ function subscribeReducedMotion(cb: () => void) {
 }
 const getReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function speak(text: string) {
+/** Warnings interrupt whatever is being said; directions queue behind it. */
+function speak(text: string, interrupt = true) {
   if (!("speechSynthesis" in window)) return;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  if (interrupt) speechSynthesis.cancel();
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text.replace(/(\d) m\b/g, "$1 meters")));
+}
+
+const DEFAULT_FILTERS: { hidden: Category[] } = { hidden: [] };
+
+type NavTarget = ({ kind: "building"; name: string } | { kind: "amenity"; type: AmenityType }) & { origin: LngLat };
+
+function planRoute(t: NavTarget, needs: AccessNeed[], obstacles: ReturnType<typeof buildObstacles>, reports: Report[]): Route | null {
+  const opts = { needs, obstacles };
+  return t.kind === "building" ? routeToBuilding(t.origin, t.name, opts) : routeToAmenity(t.origin, t.type, reports, opts);
+}
+
+async function ask<T>(body: object): Promise<T> {
+  const res = await fetch("/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`Assistant unavailable (${res.status})`);
+  return (await res.json()) as T;
 }
 
 function ControlButton({ label, icon, onClick, active }: { label: string; icon: string; onClick: () => void; active?: boolean }) {
@@ -70,6 +93,7 @@ function ReportDeepLink({ onOpen }: { onOpen: (id: string) => void }) {
 }
 
 export default function HomeScreen() {
+  const userId = useCurrentUser().id;
   const [reports, setReports] = useState<Report[]>([]);
   const [alerts, setAlerts] = useState<AccessAlert[]>([]);
   const [profile, updateProfile] = useLocalStore("cq-access-profile", DEFAULT_ACCESS_PROFILE);
@@ -77,7 +101,10 @@ export default function HomeScreen() {
   const loc = useLocation(DEMO_GEOMETRY.walkPath);
 
   const [bearing, setBearing] = useState(DEFAULT_CAMERA.bearing);
-  const [hidden, setHidden] = useState<Set<Category>>(() => new Set());
+  const [filters, updateFilters] = useLocalStore("cq-map-filters", DEFAULT_FILTERS);
+  const hidden = useMemo(() => new Set(filters.hidden), [filters.hidden]);
+  const [navTarget, setNavTarget] = useState<NavTarget | null>(null);
+  const [asking, setAsking] = useState<AskMode | null>(null);
   const [nearbyOnly, setNearbyOnly] = useState(false);
   const [follow, setFollow] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -102,12 +129,12 @@ export default function HomeScreen() {
       alive = false;
       unsubscribe();
     };
-  }, []);
+  }, [userId]);
 
-  const showToast = useCallback((text: string) => {
+  const showToast = useCallback((text: string, ms = 2600) => {
     setToast(text);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2600);
+    toastTimer.current = setTimeout(() => setToast(null), ms);
   }, []);
 
   const allObstacles = useMemo(() => buildObstacles(reports, alerts, profile.needs), [reports, alerts, profile.needs]);
@@ -133,21 +160,41 @@ export default function HomeScreen() {
   const alerting = profile.alertsOn && ahead !== null;
   const nearestRelevant = readings.find((r) => r.obstacle.relevant) ?? null;
 
-  const latest = useRef({ ahead, voice: profile.voice });
+  const route = useMemo(
+    () => (navTarget ? planRoute(navTarget, profile.needs, allObstacles, reports) : null),
+    [navTarget, profile.needs, allObstacles, reports],
+  );
+  const onRoute = route !== null && loc.source !== "demo";
+  const walkedM = route && onRoute ? progressAlong(route, loc.pos) : 0;
+  const stepIndex = route ? currentStep(route, walkedM) : 0;
+  const remainingM = route ? Math.max(0, route.distanceM - walkedM) : 0;
+  const arrived = route !== null && onRoute && !loc.simulating && remainingM < 8;
+  const barriers = useMemo(() => (route ? destinationBarriers(route.destination, reports) : []), [route, reports]);
+  const mapRoute = useMemo(() => (route ? { path: route.path, label: route.destination.label } : null), [route]);
+
+  const latest = useRef({ ahead, profile, route });
   useEffect(() => {
-    latest.current = { ahead, voice: profile.voice };
+    latest.current = { ahead, profile, route };
   });
 
   const alertId = alerting ? ahead?.id : undefined;
   useEffect(() => {
     if (!alertId || wasAlertedToday(alertId)) return;
     markAlerted(alertId);
-    navigator.vibrate?.([250, 120, 250]);
-    const current = latest.current.ahead;
-    if (latest.current.voice && current) {
-      speak(`${current.obstacle.report.title}, ${Math.round(current.distance)} meters ahead. ${current.obstacle.alert.detour_text ?? ""}`);
-    }
+    const { ahead: current, profile: p } = latest.current;
+    if (p.vibrate) navigator.vibrate?.([250, 120, 250]);
+    if (p.sound && current) chime(current.obstacle.alert.impact);
+    if (p.voice && current) speak(alertSpeech(current));
   }, [alertId]);
+
+  // Step 0 is read out when the walk starts; later steps as the walker reaches them.
+  const liveStep = route && (loc.simulating || loc.source === "gps") ? stepIndex : -1;
+  useEffect(() => {
+    const { route: r, profile: p } = latest.current;
+    if (liveStep <= 0 || !r?.steps[liveStep]) return;
+    if (p.sound) chime("step");
+    if (p.voice) speak(r.steps[liveStep].text, false);
+  }, [liveStep]);
 
   const compassItems = useMemo<CompassItem[]>(() => {
     const items: CompassItem[] = readings
@@ -184,12 +231,61 @@ export default function HomeScreen() {
   }, []);
 
   const toggleCategory = (c: Category) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(c)) next.delete(c);
-      else next.add(c);
-      return next;
-    });
+    updateFilters({ hidden: hidden.has(c) ? filters.hidden.filter((x) => x !== c) : [...filters.hidden, c] });
+
+  const applyNeeds = (r: NeedsResult) => {
+    const voice = r.alerts.voice ?? profile.voice;
+    updateProfile({ needs: r.needs, ...r.alerts });
+    if (r.focus) updateFilters({ hidden: CATEGORIES.map((c) => c.id).filter((c) => !r.focus!.includes(c)) });
+    showToast(r.summary, 5000);
+    if (voice) speak(r.summary);
+  };
+
+  const goTo = (d: DestinationResult) => {
+    if (d.kind === "unknown") {
+      const msg = "I couldn't find that place. Try a building name, like MacQuarrie Hall, or “water fountain”.";
+      showToast(msg, 4500);
+      if (profile.voice) speak(msg);
+      return;
+    }
+    const target: NavTarget = d.kind === "building" ? { kind: "building", name: d.name, origin: loc.pos } : { kind: "amenity", type: d.type, origin: loc.pos };
+    const r = planRoute(target, profile.needs, allObstacles, reports);
+    if (!r) {
+      const msg = `No ${profile.needs.length ? "accessible " : ""}route found to ${d.kind === "building" ? d.short : "a working water fountain"}.`;
+      showToast(msg, 4500);
+      if (profile.voice) speak(msg);
+      return;
+    }
+    if (loc.simulating) loc.stopSim();
+    setFollow(false);
+    setSelectedId(null);
+    setNavTarget(target);
+    const intro = `${r.destination.label}: ${Math.round(r.distanceM / 10) * 10} meters, about ${r.etaMin} minute${r.etaMin === 1 ? "" : "s"}${r.stepFree ? ", step-free" : ""}.`;
+    const skipped = r.skipped.length ? ` Skipping ${r.skipped.map((a) => a.label).join(", ")}, reported broken.` : "";
+    if (profile.voice) speak(`${intro}${skipped} ${r.steps[0].text}.`);
+  };
+
+  const onAsk = async (mode: AskMode, text: string) => {
+    primeAudio();
+    setAsking(mode);
+    try {
+      if (mode === "needs") {
+        applyNeeds(await ask<NeedsResult>({ mode, text, current: { needs: profile.needs, hidden: filters.hidden } }));
+      } else {
+        goTo(await ask<DestinationResult>({ mode, text }));
+      }
+    } catch (e) {
+      showToast((e as Error).message, 4000);
+    } finally {
+      setAsking(null);
+    }
+  };
+
+  const clearRoute = () => {
+    if (loc.simulating) loc.stopSim();
+    setFollow(false);
+    setNavTarget(null);
+  };
 
   const flyTo = (center: LngLat | undefined, extra: Partial<CameraTarget> = {}) =>
     setCameraTarget({ center, nonce: Date.now(), ...extra });
@@ -211,9 +307,14 @@ export default function HomeScreen() {
     setDismissed(new Set());
     setFocusedId(null);
     setSelectedId(null);
-    if ("speechSynthesis" in window) speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+    primeAudio();
+    if ("speechSynthesis" in window) {
+      if (route && profile.voice) speak(route.steps[0].text);
+      else speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+    }
     setFollow(true);
-    loc.startSim();
+    if (route) loc.startSim(route.path);
+    else loc.startSim();
   };
 
   const stopWalk = () => {
@@ -237,6 +338,7 @@ export default function HomeScreen() {
         flat={profile.flat}
         reducedMotion={reducedMotion}
         cameraTarget={cameraTarget}
+        route={mapRoute}
         onReportClick={setSelectedId}
         onBearingChange={setBearing}
         onUserPan={() => setFollow(false)}
@@ -282,20 +384,41 @@ export default function HomeScreen() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 p-3">
-        <div className="pointer-events-auto">
-          <AheadCard
-            ahead={ahead}
-            nearest={nearestRelevant}
-            alerting={alerting}
-            onShowDetour={showDetour}
-            onDismiss={(id) => setDismissed((prev) => new Set(prev).add(id))}
-            onAnswerStillBlocked={(id, yes) => {
-              if (yes) voteMeToo(id);
-              showToast(yes ? "Marked still blocked" : "Thanks, we'll ask others to check");
-            }}
-          />
-        </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col gap-2 p-3">
+        {!loc.simulating && (
+          <div className="pointer-events-auto">
+            <AskBar busy={asking} onSubmit={onAsk} />
+          </div>
+        )}
+        {(!route || ahead) && (
+          <div className="pointer-events-auto">
+            <AheadCard
+              ahead={ahead}
+              nearest={nearestRelevant}
+              alerting={alerting}
+              onShowDetour={showDetour}
+              onDismiss={(id) => setDismissed((prev) => new Set(prev).add(id))}
+              onChecked={(still) => showToast(still ? "Marked still there" : "Thanks, we'll take it off once others agree")}
+            />
+          </div>
+        )}
+        {route && (
+          <div className="pointer-events-auto">
+            <NavCard
+              route={route}
+              barriers={barriers}
+              stepIndex={stepIndex}
+              remainingM={remainingM}
+              walking={loc.simulating}
+              arrived={arrived}
+              onStart={startWalk}
+              onStop={stopWalk}
+              onClear={clearRoute}
+              onOpenReport={setSelectedId}
+              onChecked={(still) => showToast(still ? "Marked still there" : "Thanks, we'll take it off once others agree")}
+            />
+          </div>
+        )}
       </div>
 
       <Suspense fallback={null}>

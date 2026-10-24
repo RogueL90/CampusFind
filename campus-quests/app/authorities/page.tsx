@@ -15,7 +15,7 @@ export default function AuthoritiesPage() {
   const { data: reports, error } = useLive(() => getReportsForAuthority(authority), subscribeReports, [authority]);
 
   return (
-    <PageShell title="Authority inboxes" back="/staff">
+    <PageShell title="Authority inboxes" back="/staff" staffOnly>
       <select
         aria-label="Authority"
         value={authority}

@@ -98,6 +98,11 @@ export interface Report {
   status: ReportStatus;
   created_at: string;
   votes: number;
+  /** Latest "Still there" / "Looks resolved" check by a student. */
+  last_checked_at: string | null;
+  last_check_still: boolean | null;
+  /** "Looks resolved" checks since the last "Still there"; 3 resolve the report. */
+  resolved_votes: number;
   /** The open, claimed or submitted mission on this pin, if any. */
   mission: Mission | null;
   /** Lost & found details. */
@@ -269,6 +274,8 @@ export type HazardFlag = (typeof HAZARD_FLAGS)[number];
 
 /** What /api/triage returns, from Claude or the keyword fallback. */
 export type Triage = {
+  /** What the AI decided this is: a campus issue, or an item someone lost or found. */
+  kind: ReportKind;
   category: TriageCategory;
   /** For issues: e.g. "litter", "slow_wifi". For items: the item type, e.g. "airpods_case". */
   issue_type: string;

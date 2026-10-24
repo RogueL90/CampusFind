@@ -76,6 +76,16 @@ export function readObstacles(pos: LngLat, obstacles: Obstacle[]): ObstacleReadi
     .sort((a, b) => a.distance - b.distance);
 }
 
+/** Spoken warning, e.g. "Reported obstruction ahead near the MLK Library entrance: Ramp blocked, 40 meters. Use the …" */
+export function alertSpeech(r: ObstacleReading): string {
+  const o = r.obstacle;
+  const kind = o.alert.impact === "blocks" ? "Reported obstruction" : "Reported hazard";
+  const building = o.report.building ?? o.alert.building;
+  const where = !building ? " on your route" : o.alert.obstacle_style === "elevator" ? ` inside ${building}` : ` near the ${building} entrance`;
+  const what = (o.alert.label ?? o.report.title).replace(/\s*·\s*/g, ", ");
+  return `${kind} ahead${where}: ${what}, ${Math.round(r.distance)} meters. ${o.alert.detour_text ?? ""}`.trim();
+}
+
 /** Nearest relevant obstacle within its alert radius, in front of the student when they are moving. */
 export function findAhead(readings: ObstacleReading[], heading: number | null): ObstacleReading | null {
   return (

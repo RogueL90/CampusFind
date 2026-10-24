@@ -1,9 +1,22 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import type { Role } from "@/lib/types";
 import NotificationBell from "./NotificationBell";
+import StaffGate from "./StaffGate";
 import UserSwitcher from "./UserSwitcher";
 
-export default function PageShell({ title, back, children }: { title: string; back?: string; children: ReactNode }) {
+export default function PageShell({
+  title,
+  back,
+  staffOnly,
+  children,
+}: {
+  title: string;
+  back?: string;
+  /** Show the content only to these roles (`true` = any staff role). */
+  staffOnly?: Role[] | true;
+  children: ReactNode;
+}) {
   return (
     <div className="h-full overflow-y-auto">
       <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-cyan-400/15 bg-[#05080f]/90 px-4 py-3 backdrop-blur">
@@ -20,7 +33,9 @@ export default function PageShell({ title, back, children }: { title: string; ba
           <UserSwitcher />
         </div>
       </header>
-      <div className="mx-auto max-w-2xl p-4">{children}</div>
+      <div className="mx-auto max-w-2xl p-4">
+        {staffOnly ? <StaffGate roles={staffOnly === true ? undefined : staffOnly}>{children}</StaffGate> : children}
+      </div>
     </div>
   );
 }

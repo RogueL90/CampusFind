@@ -119,7 +119,7 @@ function MatchReview() {
           <p className="mt-1 text-slate-200">
             {atOffice
               ? isOwner
-                ? "Pick it up at the Lost & Found office with your student ID."
+                ? "Pick it up at the Lost & Found office with your student ID. Staff will ask you to describe it or unlock it first."
                 : "It's at the Lost & Found office. Thanks for bringing it in."
               : isOwner
                 ? "The finder is bringing it to the Lost & Found office. We'll ping you when it's checked in."

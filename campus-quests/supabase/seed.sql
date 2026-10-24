@@ -42,7 +42,7 @@ insert into reports (
 ) values
   -- Water
   ('b0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000005', 'issue', 'water', 'bottle_filler', 1,
-   'Bottle filler red light, Student Union 2nd floor', pg_temp.pt(37.33632, -121.88098), 'Student Union', '2',
+   'Bottle filler red light, Student Union 2nd floor', pg_temp.pt(37.33672, -121.88005), 'Student Union', '2',
    'self_fixable', '{}', '{}', 'fdo_maintenance', 'mission_open', now() - interval '2 days'),
   ('b0000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000006', 'issue', 'water', 'bottle_filler', 1,
    'Bottle filler not dispensing, Engineering 1st floor', pg_temp.pt(37.33718, -121.88182), 'Engineering', '1',
@@ -96,7 +96,7 @@ insert into reports (
    'Walkway flooded after sprinklers, Tower Lawn path', pg_temp.pt(37.33530, -121.88350), null, null,
    'staff', '{}', '{wheelchair,crutches}', 'fdo_grounds', 'routed', now() - interval '7 hours'),
 
-  -- Accessibility (16, 17 are demo obstacles)
+  -- Accessibility (16, 17, 28 are demo obstacles)
   ('b0000000-0000-4000-8000-000000000016', 'a0000000-0000-4000-8000-000000000006', 'issue', 'accessibility', 'blocked_ramp', 4,
    'Ramp blocked by delivery carts, Student Union east entrance', pg_temp.pt(37.3365904, -121.8796766), 'Student Union', '1',
    'staff', '{}', '{wheelchair,crutches}', 'fdo_maintenance', 'routed', now() - interval '45 minutes'),
@@ -109,6 +109,9 @@ insert into reports (
   ('b0000000-0000-4000-8000-000000000019', 'a0000000-0000-4000-8000-000000000006', 'issue', 'accessibility', 'door_stuck', 2,
    'Automatic door stuck closed, Business Tower', pg_temp.pt(37.33670, -121.87905), 'Business Tower', '1',
    'staff', '{}', '{wheelchair}', 'fdo_maintenance', 'routed', now() - interval '10 hours'),
+  ('b0000000-0000-4000-8000-000000000028', 'a0000000-0000-4000-8000-000000000001', 'issue', 'accessibility', 'door_blocked', 4,
+   'North doors chained shut, MacQuarrie Hall', pg_temp.pt(37.333878, -121.881814), 'MacQuarrie Hall', '1',
+   'staff', '{}', '{wheelchair,crutches,no_stairs}', 'fdo_maintenance', 'routed', now() - interval '35 minutes'),
 
   -- Pests (never missions)
   ('b0000000-0000-4000-8000-000000000020', 'a0000000-0000-4000-8000-000000000005', 'issue', 'pests', 'rats', 3,
@@ -172,7 +175,17 @@ insert into report_votes (report_id, user_id) values
   ('b0000000-0000-4000-8000-000000000012', 'a0000000-0000-4000-8000-000000000006'),
   ('b0000000-0000-4000-8000-000000000017', 'a0000000-0000-4000-8000-000000000001'),
   ('b0000000-0000-4000-8000-000000000017', 'a0000000-0000-4000-8000-000000000005'),
-  ('b0000000-0000-4000-8000-000000000020', 'a0000000-0000-4000-8000-000000000001');
+  ('b0000000-0000-4000-8000-000000000020', 'a0000000-0000-4000-8000-000000000001'),
+  ('b0000000-0000-4000-8000-000000000028', 'a0000000-0000-4000-8000-000000000002'),
+  ('b0000000-0000-4000-8000-000000000028', 'a0000000-0000-4000-8000-000000000005'),
+  ('b0000000-0000-4000-8000-000000000028', 'a0000000-0000-4000-8000-000000000006');
+
+-- "Still there" / "Looks resolved" checks, so freshness lines show from the start
+insert into report_checks (report_id, user_id, still_there, at) values
+  ('b0000000-0000-4000-8000-000000000012', 'a0000000-0000-4000-8000-000000000006', true, now() - interval '3 hours'),
+  ('b0000000-0000-4000-8000-000000000013', 'a0000000-0000-4000-8000-000000000001', false, now() - interval '40 minutes'),
+  ('b0000000-0000-4000-8000-000000000016', 'a0000000-0000-4000-8000-000000000002', true, now() - interval '12 minutes'),
+  ('b0000000-0000-4000-8000-000000000028', 'a0000000-0000-4000-8000-000000000006', true, now() - interval '8 minutes');
 
 -- ---------------------------------------------------------------------------
 -- 4. Obstacles, detours and the Simulate-walk path (same as DEMO_GEOMETRY)
@@ -202,6 +215,12 @@ insert into access_alerts (report_id, affects, obstacle_style, impact, label, de
    'Elevator out · floors 2–5',
    'Use the east elevator bank by the 4th Street entrance.',
    null, null, 3, true),
+  ('b0000000-0000-4000-8000-000000000028', '{wheelchair,crutches,no_stairs}', 'barrier', 'blocks',
+   'North doors closed',
+   'Use the south entrance on the 7th Street side. It was checked step-free 25 min ago.',
+   null,
+   st_geogfromtext('SRID=4326;LINESTRING(-121.881832 37.333874, -121.881796 37.333882)'),
+   1, true),
   ('b0000000-0000-4000-8000-000000000026', '{low_vision}', 'barrier', 'caution',
    'Low scaffolding',
    'Cross to the lawn side of the walkway.',
@@ -256,5 +275,5 @@ insert into points_ledger (user_id, delta, reason, report_id, state, created_at)
 
 -- A welcome notification so the inbox isn't empty
 insert into notifications (user_id, text, link, created_at) values
-  ('a0000000-0000-4000-8000-000000000001', 'Search mission posted for your black AirPods case. Helpers near MLK Library can see it.', '/?report=b0000000-0000-4000-8000-000000000023', now() - interval '2 hours'),
+  ('a0000000-0000-4000-8000-000000000001', 'Your black AirPods case report is with Lost & Found. Only you and staff can see it.', '/?report=b0000000-0000-4000-8000-000000000023', now() - interval '2 hours'),
   ('a0000000-0000-4000-8000-000000000002', '+10 points approved: accessibility check at Engineering.', '/missions', now() - interval '4 days');

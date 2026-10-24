@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense } from "react";
+import { isStaff } from "@/lib/currentUser";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 const TABS = [
   { href: "/", label: "Map", icon: "🛰️" },
@@ -21,9 +23,11 @@ function isActive(href: string, pathname: string) {
 }
 
 function Tabs({ pathname }: { pathname: string | null }) {
+  const staff = isStaff(useCurrentUser().role);
+  const tabs = staff ? TABS : TABS.filter((t) => t.href !== "/staff");
   return (
-    <nav className="tab-bar z-20 grid shrink-0 grid-cols-5 border-t border-cyan-400/20 bg-[#070b13]" aria-label="Main">
-      {TABS.map((t) => {
+    <nav className={`tab-bar z-20 grid shrink-0 ${staff ? "grid-cols-5" : "grid-cols-4"} border-t border-cyan-400/20 bg-[#070b13]`} aria-label="Main">
+      {tabs.map((t) => {
         const active = pathname !== null && isActive(t.href, pathname);
         return (
           <Link

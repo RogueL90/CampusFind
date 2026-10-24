@@ -44,16 +44,17 @@ export function useLocation(walkPath: LineString, simSpeedup = 6) {
     watchId.current = null;
   }, []);
 
-  const startSim = useCallback(() => {
+  /** Walks `path` (a navigation route) or, by default, the fixed demo path. */
+  const startSim = useCallback((path: LineString = walkPath) => {
     stopGps();
     if (simTimer.current) clearInterval(simTimer.current);
-    const length = turf.length(turf.feature(walkPath), { units: "meters" });
+    const length = turf.length(turf.feature(path), { units: "meters" });
     const startedAt = performance.now();
     const step = () => {
       const walked = Math.min(length, WALK_SPEED_MPS * simSpeedup * ((performance.now() - startedAt) / 1000));
-      const here = turf.along(walkPath, walked, { units: "meters" });
-      const ahead = turf.along(walkPath, Math.min(length, walked + 4), { units: "meters" });
-      const behind = turf.along(walkPath, Math.max(0, walked - 4), { units: "meters" });
+      const here = turf.along(path, walked, { units: "meters" });
+      const ahead = turf.along(path, Math.min(length, walked + 4), { units: "meters" });
+      const behind = turf.along(path, Math.max(0, walked - 4), { units: "meters" });
       const heading = walked >= length ? turf.bearing(behind, here) : turf.bearing(here, ahead);
       const done = walked >= length;
       setState({

@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import PageShell, { Empty } from "@/components/PageShell";
 import Photo from "@/components/Photo";
-import StaffNotice from "@/components/StaffNotice";
 import { userName } from "@/lib/currentUser";
 import { checkInItem, getItemByCode, getItemsAtOffice, getItemsOnTheWay, markPickedUp, subscribeReports } from "@/lib/data";
 import { timeAgo } from "@/lib/status";
@@ -21,6 +20,7 @@ export default function OfficePage() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [verifying, setVerifying] = useState<string | null>(null);
   const scanner = useRef<Scanner | null>(null);
 
   const { data: atOffice } = useLive(getItemsAtOffice, subscribeReports, []);
@@ -79,11 +79,13 @@ export default function OfficePage() {
   }
 
   const pickUp = (id: string) =>
-    markPickedUp(id).catch((e: unknown) => setMessage({ ok: false, text: e instanceof Error ? e.message : "Couldn't mark picked up." }));
+    markPickedUp(id).then(
+      () => setVerifying(null),
+      (e: unknown) => setMessage({ ok: false, text: e instanceof Error ? e.message : "Couldn't mark picked up." }),
+    );
 
   return (
-    <PageShell title="Lost & Found desk" back="/staff">
-      <StaffNotice roles={["office", "moderator"]} />
+    <PageShell title="Lost & Found desk" back="/staff" staffOnly>
       <section className="hud-panel rounded-2xl p-4">
         <h2 className="text-sm font-semibold text-white">Check in a found item</h2>
         <p className="mt-1 text-xs text-slate-400">Scan the finder&apos;s QR or type their backup code.</p>
@@ -136,14 +138,40 @@ export default function OfficePage() {
         {atOffice?.length === 0 && <Empty>No items waiting for pickup.</Empty>}
         <ul className="space-y-2">
           {atOffice?.map((r) => (
-            <li key={r.id} className="hud-panel flex items-center gap-3 rounded-xl p-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-white">{r.title}</div>
-                <div className="text-[11px] text-slate-500">Found by {userName(r.reporter_id)}</div>
+            <li key={r.id} className="hud-panel rounded-xl p-3">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-white">{r.title}</div>
+                  <div className="text-[11px] text-slate-500">Found by {userName(r.reporter_id)}</div>
+                </div>
+                {verifying !== r.id && (
+                  <button onClick={() => setVerifying(r.id)} className="shrink-0 rounded-lg bg-emerald-400/15 px-3 py-1.5 text-xs text-emerald-200">
+                    Release to owner
+                  </button>
+                )}
               </div>
-              <button onClick={() => pickUp(r.id)} className="shrink-0 rounded-lg bg-emerald-400/15 px-3 py-1.5 text-xs text-emerald-200">
-                Owner picked up · +25
-              </button>
+              {verifying === r.id && (
+                <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-xs">
+                  <div className="flex gap-3">
+                    {r.photo_urls[0] && <Photo src={r.photo_urls[0]} alt={r.title} sensitive={false} isReporter className="h-20 w-20 shrink-0" />}
+                    <div className="min-w-0 text-slate-300">
+                      <p className="font-semibold text-amber-200">Check it&apos;s really theirs</p>
+                      <p className="mt-1">Ask the owner to describe it before you show it: color, marks, what&apos;s inside. For phones and laptops, ask them to unlock it or show it in Find My.</p>
+                      {(r.item?.marks || r.description) && (
+                        <p className="mt-1 text-slate-400">Staff-only notes: {[r.item?.marks, r.description].filter(Boolean).join(" · ")}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => setVerifying(null)} className="rounded-lg border border-white/15 py-2 text-white">
+                      Cancel
+                    </button>
+                    <button onClick={() => pickUp(r.id)} className="rounded-lg bg-emerald-400 py-2 font-semibold text-slate-950">
+                      Owner verified · +25 to finder
+                    </button>
+                  </div>
+                </div>
+              )}
             </li>
           ))}
         </ul>

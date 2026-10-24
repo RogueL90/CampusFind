@@ -16,7 +16,7 @@ export default function FilterChips({
   onToggleNearby: () => void;
 }) {
   return (
-    <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1" role="group" aria-label="Filter map">
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter map">
       <button
         onClick={onToggleNearby}
         aria-pressed={nearbyOnly}

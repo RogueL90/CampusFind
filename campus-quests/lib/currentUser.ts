@@ -1,6 +1,6 @@
 // Demo "login": the chosen demo user's id lives in localStorage. No real auth for the demo.
 // Ids match supabase/seed.sql.
-import type { User } from "@/lib/types";
+import type { Role, User } from "@/lib/types";
 
 export const DEMO_USERS: User[] = [
   { id: "a0000000-0000-4000-8000-000000000001", sjsu_email: "maya@sjsu.edu", display_name: "Maya", role: "student" },
@@ -10,6 +10,10 @@ export const DEMO_USERS: User[] = [
 ];
 
 export const [MAYA, LEO, OFFICE, MODERATOR] = DEMO_USERS.map((u) => u.id);
+
+/** Roles that see the Staff tab and its screens. */
+export const STAFF_ROLES: Role[] = ["office", "moderator"];
+export const isStaff = (role: Role) => STAFF_ROLES.includes(role);
 
 /** Leo opens the app: he has 60 points and is the one who finds and returns the AirPods. */
 export const DEFAULT_USER_ID = LEO;
@@ -25,6 +29,11 @@ export function getCurrentUserId(): string {
   } catch {
     return DEFAULT_USER_ID;
   }
+}
+
+export function getCurrentUser(): User {
+  const id = getCurrentUserId();
+  return DEMO_USERS.find((u) => u.id === id) ?? DEMO_USERS[1];
 }
 
 export function setCurrentUserId(id: string) {

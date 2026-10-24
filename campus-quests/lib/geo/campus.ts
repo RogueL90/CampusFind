@@ -36,10 +36,10 @@ export const CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]
 >;
 
 export const ACCESS_NEEDS: { id: AccessNeed; label: string; short: string }[] = [
-  { id: "wheelchair", label: "Wheelchair or scooter", short: "wheelchairs" },
-  { id: "crutches", label: "Crutches or temporary injury", short: "crutches" },
-  { id: "low_vision", label: "Low vision", short: "low vision" },
-  { id: "no_stairs", label: "Avoid stairs", short: "step-free routes" },
+  { id: "wheelchair", label: "Wheelchair or mobility device", short: "wheelchairs" },
+  { id: "no_stairs", label: "Step-free routes", short: "step-free routes" },
+  { id: "low_vision", label: "Clear walking paths (low vision)", short: "low vision" },
+  { id: "crutches", label: "Crutches or slower walking", short: "crutches" },
 ];
 
 export const OBSTACLE_COLORS = {
@@ -117,6 +117,15 @@ export const DEMO_GEOMETRY = {
   },
 
   libraryElevator: { center: [-121.885007, 37.335512] as LngLat },
+
+  /** MacQuarrie Hall north doors on Paseo de San Carlos; the verified south entrance is the alternative. */
+  macquarrieDoor: {
+    center: [-121.881814, 37.333878] as LngLat,
+    blockedPath: line([
+      [-121.881832, 37.333874],
+      [-121.881796, 37.333882],
+    ]),
+  },
 
   washingtonSquareScaffold: {
     center: [-121.884, 37.33445] as LngLat,

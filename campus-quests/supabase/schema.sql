@@ -17,7 +17,7 @@ drop view if exists reports_geo, access_alerts_geo, demo_paths_geo, balances, pr
 drop table if exists
   fix_path_overrides, notifications, access_profiles, access_alerts, demo_paths,
   status_events, redemptions, rewards, points_ledger, mission_proofs, missions,
-  matches, items, report_votes, reports, users cascade;
+  matches, items, report_checks, report_votes, reports, users cascade;
 drop type if exists fix_path cascade;
 
 -- ---------------------------------------------------------------------------
@@ -70,6 +70,16 @@ create table report_votes (
   created_at timestamptz not null default now(),
   primary key (report_id, user_id)
 );
+
+-- "Still there" / "Looks resolved" from students walking past (check_report).
+create table report_checks (
+  id          bigserial primary key,
+  report_id   uuid not null references reports(id) on delete cascade,
+  user_id     uuid not null references users(id) on delete cascade,
+  still_there boolean not null,
+  at          timestamptz not null default now()
+);
+create index report_checks_report_idx on report_checks (report_id, at desc);
 
 create table items (
   report_id        uuid primary key references reports(id) on delete cascade,
@@ -238,6 +248,12 @@ select
   r.cc, r.identified, r.routing_reason, r.report_subject, r.report_body,
   r.contains_sensitive, r.status, r.created_at,
   (select count(*) from report_votes v where v.report_id = r.id)::int as votes,
+  lc.at as last_checked_at,
+  lc.still_there as last_check_still,
+  (select count(distinct c.user_id) from report_checks c
+   where c.report_id = r.id and not c.still_there
+     and c.at > coalesce((select max(s.at) from report_checks s where s.report_id = r.id and s.still_there), '-infinity'))::int
+    as resolved_votes,
   m.id as mission_id,
   m.mission_type,
   m.title as mission_title,
@@ -255,6 +271,12 @@ left join lateral (
   order by mm.created_at desc
   limit 1
 ) m on true
+left join lateral (
+  select c.at, c.still_there from report_checks c
+  where c.report_id = r.id
+  order by c.at desc
+  limit 1
+) lc on true
 left join items i on i.report_id = r.id;
 
 create view access_alerts_geo as
@@ -423,6 +445,7 @@ declare
             )::fix_path;
   v_dup     uuid;
   v_radius  int;
+  v_style   text;
 begin
   perform assert_not_banned(p_reporter);
   if v_kind not in ('issue', 'lost', 'found') then
@@ -482,11 +505,20 @@ begin
   -- A student-reported barrier becomes an unconfirmed obstacle; it reaches the HUD once
   -- staff confirm it or 3 students tap "Me too".
   if v_kind = 'issue' and jsonb_array_length(coalesce(p->'access_impact', '[]'::jsonb)) > 0 then
+    v_style := case
+      when coalesce(p->>'issue_type', '') ~* 'elevator' then 'elevator'
+      when coalesce(p->>'issue_type', '') ~* 'construction|barricade|fence|road_?work' then 'zone'
+      else 'pothole'
+    end;
+    -- Zones need an area to stand up in 3D; a student pin gets a small one around it.
+    if v_style = 'zone' then
+      update reports set footprint = st_buffer(v_loc, 12, 'quad_segs=2')::geography where id = v_id;
+    end if;
     insert into access_alerts (report_id, affects, obstacle_style, impact, label)
     values (
       v_id,
       array(select jsonb_array_elements_text(p->'access_impact')),
-      case when coalesce(p->>'issue_type', '') ~* 'elevator' then 'elevator' else 'pothole' end,
+      v_style,
       case when coalesce((p->>'severity')::int, 2) >= 4 then 'blocks' else 'caution' end,
       coalesce(p->>'title', 'Access barrier')
     );
@@ -543,6 +575,38 @@ begin
   -- A student-reported obstacle starts alerting at 3 "Me too" votes.
   if (select count(*) from report_votes where report_id = p_report) >= 3 then
     update access_alerts set confirmed = true where report_id = p_report and not confirmed;
+  end if;
+end $$;
+
+-- "Still there" also counts as a Me too. Three different students saying "looks resolved" after the
+-- last "still there" resolve the issue, cancel its open mission and take it off the map.
+create or replace function check_report(p_report uuid, p_user uuid, p_still boolean) returns void
+language plpgsql set search_path = public, extensions as $$
+declare
+  r reports;
+  v_resolved int;
+begin
+  perform assert_not_banned(p_user);
+  select * into r from reports where id = p_report for update;
+  if not found then
+    raise exception 'Report not found';
+  end if;
+  insert into report_checks (report_id, user_id, still_there) values (p_report, p_user, p_still);
+
+  if p_still then
+    if p_user is distinct from r.reporter_id then
+      perform vote_me_too(p_report, p_user);
+    end if;
+    return;
+  end if;
+
+  select resolved_votes into v_resolved from reports_geo where id = p_report;
+  if v_resolved >= 3 and r.kind = 'issue' and r.status not in ('resolved', 'verified', 'closed') then
+    perform set_report_status(p_report, 'resolved', null);
+    update missions set status = 'cancelled' where report_id = p_report and status in ('open', 'claimed');
+    if r.reporter_id is not null then
+      perform notify_user(r.reporter_id, format('Students say "%s" looks resolved. It''s off the map now.', r.title), '/?report=' || p_report);
+    end if;
   end if;
 end $$;
 
@@ -947,7 +1011,7 @@ declare
   t text;
 begin
   foreach t in array array[
-    'users', 'reports', 'report_votes', 'items', 'matches', 'missions', 'mission_proofs',
+    'users', 'reports', 'report_votes', 'report_checks', 'items', 'matches', 'missions', 'mission_proofs',
     'points_ledger', 'rewards', 'redemptions', 'status_events', 'access_alerts',
     'access_profiles', 'demo_paths', 'notifications', 'fix_path_overrides'
   ] loop
@@ -966,7 +1030,7 @@ begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     foreach t in array array[
       'reports', 'missions', 'matches', 'points_ledger', 'notifications',
-      'report_votes', 'items', 'access_alerts'
+      'report_votes', 'report_checks', 'items', 'access_alerts'
     ] loop
       if not exists (
         select 1 from pg_publication_tables

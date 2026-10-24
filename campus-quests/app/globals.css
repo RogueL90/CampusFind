@@ -200,3 +200,20 @@ body {
     animation: none;
   }
 }
+
+/* Navigation destination */
+.hud-dest {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font: 700 11px/1.2 var(--font-geist-sans), sans-serif;
+  color: #05080f;
+  background: #22d3ee;
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

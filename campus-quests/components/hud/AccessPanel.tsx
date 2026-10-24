@@ -7,10 +7,12 @@ export interface AccessProfile {
   alertsOn: boolean;
   needs: AccessNeed[];
   voice: boolean;
+  sound: boolean;
+  vibrate: boolean;
   flat: boolean;
 }
 
-export const DEFAULT_ACCESS_PROFILE: AccessProfile = { alertsOn: true, needs: [], voice: true, flat: false };
+export const DEFAULT_ACCESS_PROFILE: AccessProfile = { alertsOn: true, needs: [], voice: true, sound: true, vibrate: true, flat: false };
 
 function Toggle({ label, hint, on, onChange }: { label: string; hint?: string; on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -51,13 +53,21 @@ export default function AccessPanel({
           </button>
         </div>
         <p className="mb-2 text-[11px] text-slate-400">Private to this phone. Never shown to anyone, no documentation needed.</p>
-        <Toggle label="Obstacle alerts" hint="Vibrate and warn within 150 m" on={profile.alertsOn} onChange={(v) => onChange({ alertsOn: v })} />
-        <div className="my-1 border-t border-slate-700/60 pt-2 text-[11px] uppercase tracking-wider text-slate-400">What should count as an obstacle?</div>
+        <Toggle label="Obstacle alerts" hint="Warn when a reported barrier is within 150 m" on={profile.alertsOn} onChange={(v) => onChange({ alertsOn: v })} />
+        <div className="my-1 border-t border-slate-700/60 pt-2 text-[11px] uppercase tracking-wider text-slate-400">Route and highlight for</div>
         {ACCESS_NEEDS.map((n) => (
           <Toggle key={n.id} label={n.label} on={profile.needs.includes(n.id)} onChange={() => toggleNeed(n.id)} />
         ))}
         <div className="my-1 border-t border-slate-700/60" />
-        <Toggle label="Read alerts aloud" on={profile.voice} onChange={(v) => onChange({ voice: v })} />
+        <div className="pt-1 text-[11px] uppercase tracking-wider text-slate-400">How to warn me</div>
+        <Toggle label="Sound" hint="Two-tone chime" on={profile.sound} onChange={(v) => onChange({ sound: v })} />
+        <Toggle label="Vibration" on={profile.vibrate} onChange={(v) => onChange({ vibrate: v })} />
+        <Toggle
+          label="Spoken warnings"
+          hint="“Reported obstruction ahead near the library entrance”, plus directions"
+          on={profile.voice}
+          onChange={(v) => onChange({ voice: v })}
+        />
         <Toggle label="Flat 2D map" hint="Easier for screen readers and older phones" on={profile.flat} onChange={(v) => onChange({ flat: v })} />
       </div>
     </div>
