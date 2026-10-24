@@ -12,7 +12,6 @@ import type { AmenityType } from "@/lib/geo/places";
 import type { DestinationResult, NeedsResult } from "@/lib/assist";
 import { chime, primeAudio } from "@/lib/chime";
 import { markAlerted, resetAlertMemory, wasAlertedToday } from "@/lib/geo/alertMemory";
-import { useLocalStore } from "@/lib/useLocalStore";
 import type { AccessAlert, AccessNeed, Category, Report } from "@/lib/types";
 import CompassStrip, { type CompassItem } from "@/components/hud/CompassStrip";
 import StatusCorner from "@/components/hud/StatusCorner";
@@ -104,12 +103,15 @@ export default function HomeScreen() {
   const profileBox = useRef<HTMLDivElement>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [alerts, setAlerts] = useState<AccessAlert[]>([]);
-  const [profile, updateProfile] = useLocalStore("cq-access-profile", DEFAULT_ACCESS_PROFILE);
+  // Kept in memory only, so a reload starts the demo with no needs and every pin visible.
+  const [profile, setProfile] = useState(DEFAULT_ACCESS_PROFILE);
+  const updateProfile = (patch: Partial<typeof DEFAULT_ACCESS_PROFILE>) => setProfile((p) => ({ ...p, ...patch }));
   const reducedMotion = useSyncExternalStore(subscribeReducedMotion, getReducedMotion, () => false);
   const loc = useLocation(DEMO_GEOMETRY.walkPath);
 
   const [bearing, setBearing] = useState(DEFAULT_CAMERA.bearing);
-  const [filters, updateFilters] = useLocalStore("cq-map-filters", DEFAULT_FILTERS);
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const updateFilters = (patch: Partial<typeof DEFAULT_FILTERS>) => setFilters((f) => ({ ...f, ...patch }));
   const hidden = useMemo(() => new Set(filters.hidden), [filters.hidden]);
   const [navTarget, setNavTarget] = useState<NavTarget | null>(null);
   const [asking, setAsking] = useState<AskMode | null>(null);
@@ -121,6 +123,11 @@ export default function HomeScreen() {
   const [cameraTarget, setCameraTarget] = useState<CameraTarget | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    localStorage.removeItem("cq-access-profile");
+    localStorage.removeItem("cq-map-filters");
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -272,6 +279,10 @@ export default function HomeScreen() {
       return;
     }
     const target: NavTarget = d.kind === "building" ? { kind: "building", name: d.name, origin: loc.pos } : { kind: "amenity", type: d.type, origin: loc.pos };
+    // A bottle fill or fountain is also a reason to show water pins, which a needs filter may have hidden.
+    if (d.kind === "amenity" && d.type === "water" && hidden.has("water")) {
+      updateFilters({ hidden: filters.hidden.filter((c) => c !== "water") });
+    }
     const r = planRoute(target, profile.needs, allObstacles, reports);
     if (!r) {
       const msg = `No ${profile.needs.length ? "accessible " : ""}route found to ${d.kind === "building" ? d.short : "a working water fountain"}.`;
